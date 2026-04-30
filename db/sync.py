@@ -77,7 +77,7 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
         SELECT
             CAST(o.[ACCOUNT#I] AS NVARCHAR(50))      AS account_number,
             CAST(o.INVOICE_DATE_YYYYMMDD AS BIGINT)  AS invoice_date_raw,
-            SUM(o.EXTENDED_PRICE_NO_FUNDS)           AS total_sales
+            SUM(o.ENTENDED_PRICE_NO_FUNDS)           AS total_sales
         FROM dbo._ORDERS o
         {join_clause}
         WHERE

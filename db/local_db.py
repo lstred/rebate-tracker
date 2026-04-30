@@ -380,8 +380,8 @@ def init_db() -> None:
         _seed_setting(session, "date_range_start", "")
         _seed_setting(session, "date_range_end", "")
         _seed_setting(session, "bill_to_account_field", "BACCT")  # Verify this field name
-        _seed_setting(session, "cost_center_filter", "item_join")  # 'item_join' | 'orders_field'
-        _seed_setting(session, "cost_center_orders_field", "COST_CTR")  # If cost_center_filter=orders_field
+        _seed_setting(session, "cost_center_filter", "orders_field")  # 'item_join' | 'orders_field'
+        _seed_setting(session, "cost_center_orders_field", "COST_CENTER")  # If cost_center_filter=orders_field
 
 
 def _seed_setting(session: Session, key: str, default_value: str) -> None:
