@@ -1,0 +1,41 @@
+# Local connection config — contains credentials, never commit
+config.py
+
+# SQLite database and app data
+*.db
+*.db-shm
+*.db-wal
+
+# Virtual environments
+C:\rtenv\
+rtenv/
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Distribution / build
+build/
+dist/
+*.egg-info/
+*.egg
+
+# PDF exports
+*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
