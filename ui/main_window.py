@@ -44,7 +44,7 @@ from PyQt6.QtWidgets import (
 
 from db.local_db import get_setting, set_setting
 from db.sync import SyncWorker
-from ui.theme import C
+from ui.theme import C, apply_theme
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +361,11 @@ class MainWindow(QMainWindow):
         CloudBackupWorker._instance = self._cloud_worker
         self._cloud_worker.status_changed.connect(self._on_cloud_backup_status)
 
+        # Apply saved theme
+        saved_theme = get_setting("theme", "dark")
+        if saved_theme != "dark":
+            self._apply_theme(saved_theme)
+
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
@@ -369,6 +374,7 @@ class MainWindow(QMainWindow):
         self.sidebar.nav_changed.connect(self._on_nav_changed)
         self.top_bar.date_range_changed.connect(self._on_date_range_changed)
         self.top_bar.sync_requested.connect(self._on_sync_requested)
+        self.view_settings.theme_changed.connect(self._apply_theme)
 
     def _on_nav_changed(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
@@ -428,6 +434,14 @@ class MainWindow(QMainWindow):
             from datetime import datetime
             ts = datetime.now().strftime("%H:%M")
             self.status_bar.showMessage(f"☁  Cloud backup updated at {ts}.", 6000)
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """Rebuild the stylesheet for the given theme and re-apply to the app."""
+        from PyQt6.QtWidgets import QApplication
+        qss = apply_theme(theme_name)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(qss)
         else:
             # Only log — don't interrupt the user with a dialog for background failures
             self.status_bar.showMessage(f"☁  Cloud backup: {msg}", 8000)

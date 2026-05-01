@@ -10,6 +10,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -19,6 +20,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QTextEdit,
     QVBoxLayout,
@@ -82,6 +84,8 @@ class CloudRestoreWorker(QThread):
 # ---------------------------------------------------------------------------
 
 class SettingsView(QWidget):
+    theme_changed = pyqtSignal(str)   # "dark" | "light"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
@@ -104,6 +108,96 @@ class SettingsView(QWidget):
         heading = QLabel("Settings")
         heading.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
         root.addWidget(heading)
+
+        # ── Appearance ─────────────────────────────────────────────────
+        appear_group = QGroupBox("Appearance")
+        appear_layout = QVBoxLayout(appear_group)
+        appear_layout.setSpacing(10)
+
+        appear_lbl = QLabel("Choose the application colour theme.  Takes effect immediately.")
+        appear_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        appear_lbl.setWordWrap(True)
+        appear_layout.addWidget(appear_lbl)
+
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(16)
+        self._theme_group = QButtonGroup(self)
+        current_theme = get_setting("theme", "dark")
+
+        self._radio_dark  = QRadioButton("🌙  Dark")
+        self._radio_light = QRadioButton("☀  Light")
+        self._radio_dark.setChecked(current_theme != "light")
+        self._radio_light.setChecked(current_theme == "light")
+        self._theme_group.addButton(self._radio_dark,  0)
+        self._theme_group.addButton(self._radio_light, 1)
+        self._theme_group.idToggled.connect(self._on_theme_toggled)
+
+        theme_row.addWidget(self._radio_dark)
+        theme_row.addWidget(self._radio_light)
+        theme_row.addStretch()
+        appear_layout.addLayout(theme_row)
+
+        root.addWidget(appear_group)
+
+        # ── Email (SMTP) ────────────────────────────────────────────────
+        email_group = QGroupBox("Email — Microsoft Outlook / Office 365")
+        email_layout = QVBoxLayout(email_group)
+        email_layout.setSpacing(10)
+
+        email_help = QLabel(
+            "Configure your Outlook credentials to send rebate statement PDFs directly "
+            "from the PDF Templates tab.  Uses STARTTLS on port 587 by default.\n"
+            "If your organisation uses multi-factor authentication, generate an "
+            "App Password in your Microsoft account security settings."
+        )
+        email_help.setWordWrap(True)
+        email_help.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        email_layout.addWidget(email_help)
+
+        email_form = QFormLayout()
+        email_form.setSpacing(8)
+
+        self.smtp_host = QLineEdit(get_setting("smtp_host", "smtp.office365.com"))
+        self.smtp_host.setPlaceholderText("smtp.office365.com")
+        email_form.addRow("SMTP Host:", self.smtp_host)
+
+        self.smtp_port = QLineEdit(get_setting("smtp_port", "587"))
+        self.smtp_port.setPlaceholderText("587")
+        self.smtp_port.setFixedWidth(80)
+        email_form.addRow("Port:", self.smtp_port)
+
+        self.smtp_user = QLineEdit(get_setting("smtp_user", ""))
+        self.smtp_user.setPlaceholderText("your.name@company.com")
+        email_form.addRow("Email Address:", self.smtp_user)
+
+        self.smtp_password = QLineEdit(get_setting("smtp_password", ""))
+        self.smtp_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.smtp_password.setPlaceholderText("••••••••")
+        email_form.addRow("Password / App Password:", self.smtp_password)
+
+        self.smtp_from_name = QLineEdit(get_setting("smtp_from_name", ""))
+        self.smtp_from_name.setPlaceholderText("e.g. NRF Flooring")
+        email_form.addRow("Display Name:", self.smtp_from_name)
+
+        email_layout.addLayout(email_form)
+
+        email_btn_row = QHBoxLayout()
+        btn_save_email = QPushButton("Save Email Settings")
+        btn_save_email.setProperty("class", "primary")
+        btn_save_email.clicked.connect(self._save_email_settings)
+        email_btn_row.addWidget(btn_save_email)
+
+        btn_test_email = QPushButton("Send Test Email")
+        btn_test_email.clicked.connect(self._test_email)
+        email_btn_row.addWidget(btn_test_email)
+        email_btn_row.addStretch()
+        email_layout.addLayout(email_btn_row)
+
+        self.email_status = QLabel("")
+        self.email_status.setWordWrap(True)
+        email_layout.addWidget(self.email_status)
+
+        root.addWidget(email_group)
 
         # ── SQL Server Connection ─────────────────────────────────────
         conn_group = QGroupBox("SQL Server Connection")
@@ -402,19 +496,26 @@ class SettingsView(QWidget):
         self._save_cloud_settings()
         self.cloud_status.setText("Pushing backup to cloud…")
         self.cloud_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
-        # Reuse the singleton worker so we don't open a second connection
-        try:
-            from services.cloud_backup import CloudBackupWorker
-            if CloudBackupWorker._instance is not None:
-                CloudBackupWorker._instance.schedule()
-                self.cloud_status.setText("Backup queued — will complete in the background.")
-            else:
-                # Fallback: run inline (window not yet ready)
-                from services.cloud_backup import push_backup
-                ok, msg = push_backup()
-                self._on_cloud_test_result(ok, msg)
-        except Exception as exc:
-            self._on_cloud_test_result(False, str(exc))
+
+        class _BackupNowWorker(QThread):
+            finished_now = pyqtSignal(bool, str)
+            def run(self):
+                try:
+                    from services.cloud_backup import push_backup
+                    ok, msg = push_backup()
+                    self.finished_now.emit(ok, msg)
+                except Exception as exc:
+                    self.finished_now.emit(False, str(exc))
+
+        self._backup_now_worker = _BackupNowWorker(self)
+        self._backup_now_worker.finished_now.connect(self._on_backup_now_finished)
+        self._backup_now_worker.start()
+
+    def _on_backup_now_finished(self, ok: bool, msg: str):
+        color = C["success"] if ok else C["danger"]
+        prefix = "✓  " if ok else "✗  "
+        self.cloud_status.setText(prefix + msg)
+        self.cloud_status.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     def _restore_from_cloud(self):
         from PyQt6.QtWidgets import QMessageBox
@@ -459,3 +560,69 @@ class SettingsView(QWidget):
             )
         else:
             QMessageBox.critical(self, "Restore Failed", msg)
+
+    # ------------------------------------------------------------------
+    # Theme toggle
+    # ------------------------------------------------------------------
+
+    def _on_theme_toggled(self, btn_id: int, checked: bool):
+        if not checked:
+            return
+        theme = "light" if btn_id == 1 else "dark"
+        from db.local_db import set_setting
+        set_setting("theme", theme)
+        self.theme_changed.emit(theme)
+
+    # ------------------------------------------------------------------
+    # Email settings handlers
+    # ------------------------------------------------------------------
+
+    def _save_email_settings(self):
+        from db.local_db import set_setting
+        set_setting("smtp_host",      self.smtp_host.text().strip() or "smtp.office365.com")
+        set_setting("smtp_port",      self.smtp_port.text().strip() or "587")
+        set_setting("smtp_user",      self.smtp_user.text().strip())
+        set_setting("smtp_password",  self.smtp_password.text())
+        set_setting("smtp_from_name", self.smtp_from_name.text().strip())
+        self.email_status.setText("✓  Email settings saved.")
+        self.email_status.setStyleSheet(f"color: {C['success']}; font-size: 11px;")
+
+    def _test_email(self):
+        self._save_email_settings()
+        recipient = self.smtp_user.text().strip()
+        if not recipient:
+            QMessageBox.warning(self, "No Address", "Enter your email address first.")
+            return
+        self.email_status.setText("Sending test email…")
+        self.email_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+
+        class _TestWorker(QThread):
+            result = pyqtSignal(bool, str)
+            def __init__(self, to_addr, parent=None):
+                super().__init__(parent)
+                self._to = to_addr
+            def run(self):
+                from services.email_sender import get_smtp_settings
+                import smtplib, ssl
+                cfg = get_smtp_settings()
+                try:
+                    ctx = ssl.create_default_context()
+                    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=15) as srv:
+                        srv.ehlo()
+                        srv.starttls(context=ctx)
+                        srv.login(cfg["user"], cfg["password"])
+                    self.result.emit(True, f"Connected to {cfg['host']} successfully. Credentials are valid.")
+                except smtplib.SMTPAuthenticationError:
+                    self.result.emit(False, "Authentication failed — check username and password / App Password.")
+                except Exception as exc:
+                    self.result.emit(False, str(exc))
+
+        self._email_test_worker = _TestWorker(recipient, self)
+        self._email_test_worker.result.connect(self._on_email_test_result)
+        self._email_test_worker.start()
+
+    def _on_email_test_result(self, ok: bool, msg: str):
+        color = C["success"] if ok else C["danger"]
+        prefix = "✓  " if ok else "✗  "
+        self.email_status.setText(prefix + msg)
+        self.email_status.setStyleSheet(f"color: {color}; font-size: 11px;")

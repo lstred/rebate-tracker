@@ -36,6 +36,9 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -186,6 +189,87 @@ class TargetedExportWorker(QThread):
                 print(f"[PDF] Error generating {acct.account_number}: {exc}")
 
         self.finished.emit(True, "Export complete.", len(written))
+
+
+# ---------------------------------------------------------------------------
+# Email send worker (one account at a time)
+# ---------------------------------------------------------------------------
+
+class EmailSendWorker(QThread):
+    """Generate a PDF (if needed) and email it to a single account."""
+
+    finished = pyqtSignal(bool, str)   # success, message
+
+    def __init__(
+        self,
+        account_number: str,
+        to_email: str,
+        to_name: str,
+        pdf_dir: str,
+        period_end,
+        template_config: dict,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.account_number = account_number
+        self.to_email = to_email
+        self.to_name = to_name
+        self.pdf_dir = pdf_dir
+        self.period_end = period_end
+        self.template_config = template_config
+
+    def run(self):
+        import os
+        from pathlib import Path
+        from db.local_db import Account, AccountRebateAssignment, RebateStructure, get_session
+        from services.rebate_calculator import get_account_period
+        from services.pdf_generator import generate_statement
+        from services.email_sender import send_statement_email
+
+        Path(self.pdf_dir).mkdir(parents=True, exist_ok=True)
+        pdf_path = os.path.join(self.pdf_dir, f"{self.account_number}.pdf")
+
+        # Generate PDF if not already present
+        try:
+            with get_session() as session:
+                acct = session.query(Account).filter_by(
+                    account_number=self.account_number
+                ).first()
+                assignment = session.query(AccountRebateAssignment).filter_by(
+                    account_number=self.account_number
+                ).first()
+                structure = (
+                    session.query(RebateStructure).filter_by(
+                        id=assignment.rebate_structure_id
+                    ).first()
+                    if assignment else None
+                )
+                acct_name = acct.account_name if acct else self.to_name
+
+            if not acct or not structure:
+                self.finished.emit(
+                    False,
+                    f"{self.account_number}: no account or rebate structure found."
+                )
+                return
+
+            period_start, period_end = get_account_period(acct, self.period_end)
+            generate_statement(
+                acct, period_start, period_end,
+                self.template_config, structure,
+                output_path=pdf_path,
+            )
+        except Exception as exc:
+            self.finished.emit(False, f"PDF generation failed: {exc}")
+            return
+
+        ok, msg = send_statement_email(
+            to_email=self.to_email,
+            to_name=self.to_name,
+            account_number=self.account_number,
+            pdf_path=pdf_path,
+        )
+        self.finished.emit(ok, msg)
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +601,94 @@ class PdfTemplateView(QWidget):
 
         root.addWidget(export_frame)
 
+        # ── Email Statements section ──────────────────────────────────
+        email_frame = QFrame()
+        email_frame.setProperty("class", "card")
+        email_outer = QVBoxLayout(email_frame)
+        email_outer.setContentsMargins(16, 12, 16, 12)
+        email_outer.setSpacing(10)
+
+        email_heading_row = QHBoxLayout()
+        email_heading_lbl = QLabel("Email Statements to Dealers")
+        email_heading_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        email_heading_row.addWidget(email_heading_lbl)
+        email_heading_row.addStretch()
+
+        btn_reload_email = QPushButton("⟳ Refresh List")
+        btn_reload_email.clicked.connect(self._load_email_table)
+        email_heading_row.addWidget(btn_reload_email)
+        email_outer.addLayout(email_heading_row)
+
+        email_desc = QLabel(
+            "Select an output folder (PDFs are generated on demand), then use the buttons "
+            "below to preview a statement or send it directly to the dealer's email address. "
+            "Accounts without an email address are shown but the Send button is disabled. "
+            "Set email addresses in the Accounts view."
+        )
+        email_desc.setWordWrap(True)
+        email_desc.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        email_outer.addWidget(email_desc)
+
+        # Folder + group filter row
+        email_ctrl_row = QHBoxLayout()
+        email_ctrl_row.setSpacing(8)
+
+        folder_lbl2 = QLabel("PDF folder:")
+        folder_lbl2.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
+        email_ctrl_row.addWidget(folder_lbl2)
+        self.lbl_email_dir = QLabel("Use same folder as Generate section above")
+        self.lbl_email_dir.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
+        email_ctrl_row.addWidget(self.lbl_email_dir, stretch=1)
+
+        email_ctrl_row.addSpacing(16)
+        filter_lbl = QLabel("Group:")
+        filter_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
+        email_ctrl_row.addWidget(filter_lbl)
+        self.email_group_filter = QComboBox()
+        self.email_group_filter.setFixedWidth(200)
+        self.email_group_filter.currentIndexChanged.connect(self._load_email_table)
+        email_ctrl_row.addWidget(self.email_group_filter)
+
+        email_outer.addLayout(email_ctrl_row)
+
+        # Table: Account# | Name | Email | PDF File | Preview | Send
+        self.email_table = QTableWidget(0, 6)
+        self.email_table.setHorizontalHeaderLabels(
+            ["Account #", "Name", "Email", "PDF File", "Preview", "Send"]
+        )
+        self.email_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.email_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.email_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.email_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.email_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.email_table.horizontalHeader().setSectionResizeMode(
+            5, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.email_table.verticalHeader().setVisible(False)
+        self.email_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.email_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.email_table.setAlternatingRowColors(True)
+        self.email_table.setMinimumHeight(200)
+        email_outer.addWidget(self.email_table)
+
+        self.email_status_lbl = QLabel("")
+        self.email_status_lbl.setWordWrap(True)
+        email_outer.addWidget(self.email_status_lbl)
+
+        root.addWidget(email_frame)
+
+        self._email_workers: list = []   # keep references to avoid GC
+
         self._export_dir: str = ""
         self._export_worker: Optional[QThread] = None
         self._load_templates()
@@ -537,7 +709,203 @@ class PdfTemplateView(QWidget):
         if templates:
             self.tmpl_list.setCurrentRow(0)
 
-    def _on_template_selected(self, current, _):
+        # Populate email group filter
+        self._init_email_group_filter()
+        self._load_email_table()
+
+    def _init_email_group_filter(self):
+        self.email_group_filter.blockSignals(True)
+        self.email_group_filter.clear()
+        self.email_group_filter.addItem("All Accounts", None)
+        with get_session() as session:
+            from db.local_db import Account
+            groups = (
+                session.query(Account.program_bc_code)
+                .filter(Account.is_active.is_(True), Account.program_bc_code.isnot(None))
+                .distinct()
+                .order_by(Account.program_bc_code)
+                .all()
+            )
+        for (grp,) in groups:
+            if grp:
+                self.email_group_filter.addItem(grp, grp)
+        self.email_group_filter.blockSignals(False)
+
+    def _load_email_table(self):
+        import os
+        self.email_table.setRowCount(0)
+        group_filter = self.email_group_filter.currentData()
+        with get_session() as session:
+            from db.local_db import Account
+            q = session.query(Account).filter(Account.is_active.is_(True))
+            if group_filter:
+                q = q.filter(Account.program_bc_code == group_filter)
+            accounts = q.order_by(Account.account_number).all()
+            account_data = [
+                (a.account_number, a.account_name or a.account_number, getattr(a, "email", "") or "")
+                for a in accounts
+            ]
+
+        # Determine PDF dir from generate section
+        pdf_dir = getattr(self, "_last_export_dir", "")
+        if not pdf_dir:
+            from db.local_db import get_setting
+            pdf_dir = get_setting("last_export_dir", "")
+
+        for acct_num, acct_name, email in account_data:
+            row = self.email_table.rowCount()
+            self.email_table.insertRow(row)
+            self.email_table.setItem(row, 0, QTableWidgetItem(acct_num))
+            self.email_table.setItem(row, 1, QTableWidgetItem(acct_name))
+            self.email_table.setItem(row, 2, QTableWidgetItem(email))
+
+            # PDF file cell
+            pdf_path = os.path.join(pdf_dir, f"{acct_num}.pdf") if pdf_dir else ""
+            pdf_exists = os.path.isfile(pdf_path)
+            pdf_item = QTableWidgetItem(os.path.basename(pdf_path) if pdf_dir else "—")
+            if pdf_exists:
+                pdf_item.setForeground(
+                    __import__("PyQt6.QtGui", fromlist=["QColor"]).QColor(C["success"])
+                )
+            self.email_table.setItem(row, 3, pdf_item)
+
+            # Preview button
+            btn_preview = QPushButton("Preview")
+            btn_preview.setFixedHeight(24)
+            btn_preview.setEnabled(pdf_exists)
+            btn_preview.setProperty("_pdf_path", pdf_path)
+            btn_preview.clicked.connect(
+                lambda checked, p=pdf_path: self._preview_pdf(p)
+            )
+            self.email_table.setCellWidget(row, 4, btn_preview)
+
+            # Send button
+            btn_send = QPushButton("✉ Send")
+            btn_send.setFixedHeight(24)
+            btn_send.setProperty("class", "primary")
+            btn_send.setEnabled(bool(email))
+            btn_send.setToolTip("" if email else "No email address — set it in the Accounts view")
+            btn_send.clicked.connect(
+                lambda checked, r=row, n=acct_num, nm=acct_name, em=email:
+                    self._send_statement(r, n, nm, em)
+            )
+            self.email_table.setCellWidget(row, 5, btn_send)
+
+    def _preview_pdf(self, pdf_path: str):
+        import os
+        if not os.path.isfile(pdf_path):
+            QMessageBox.warning(
+                self, "File Not Found",
+                f"PDF not found:\n{pdf_path}\n\nGenerate the statement first."
+            )
+            return
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl.fromLocalFile(pdf_path))
+
+    def _send_statement(self, row: int, account_number: str, account_name: str, email: str):
+        if not email:
+            QMessageBox.warning(
+                self, "No Email Address",
+                f"Account {account_number} has no email address.\n"
+                "Set it in the Accounts view."
+            )
+            return
+
+        from services.email_sender import smtp_configured
+        if not smtp_configured():
+            QMessageBox.warning(
+                self, "Email Not Configured",
+                "Please configure your SMTP credentials in Settings → Email before sending."
+            )
+            return
+
+        # Get PDF dir
+        pdf_dir = getattr(self, "_last_export_dir", "")
+        if not pdf_dir:
+            from db.local_db import get_setting
+            pdf_dir = get_setting("last_export_dir", "")
+        if not pdf_dir:
+            pdf_dir = QFileDialog.getExistingDirectory(self, "Choose PDF Output Folder")
+            if not pdf_dir:
+                return
+            self._last_export_dir = pdf_dir
+            from db.local_db import set_setting
+            set_setting("last_export_dir", pdf_dir)
+
+        # Collect template config
+        config = self._current_config()
+        period_end = self._period_end_date()
+
+        # Disable send button while working
+        send_btn = self.email_table.cellWidget(row, 5)
+        if send_btn:
+            send_btn.setEnabled(False)
+            send_btn.setText("Sending…")
+
+        # Update status cell (col 3)
+        self.email_table.setItem(row, 3, QTableWidgetItem("Generating…"))
+
+        worker = EmailSendWorker(
+            account_number=account_number,
+            to_email=email,
+            to_name=account_name,
+            pdf_dir=pdf_dir,
+            period_end=period_end,
+            template_config=config,
+            parent=self,
+        )
+        self._email_workers.append(worker)
+
+        def on_done(ok, msg, r=row, acct=account_number, em=email, w=worker):
+            import os
+            self._email_workers.remove(w)
+            pdf_path = os.path.join(pdf_dir, f"{acct}.pdf")
+            self.email_table.setItem(
+                r, 3,
+                QTableWidgetItem(os.path.basename(pdf_path) if os.path.isfile(pdf_path) else "—")
+            )
+            status_item = QTableWidgetItem("✓ Sent" if ok else f"✗ {msg}")
+            from PyQt6.QtGui import QColor
+            status_item.setForeground(QColor(C["success"] if ok else C["danger"]))
+            self.email_table.setItem(r, 2, QTableWidgetItem(em))
+
+            btn = self.email_table.cellWidget(r, 5)
+            if btn:
+                btn.setEnabled(True)
+                btn.setText("✉ Send")
+
+            prev_btn = self.email_table.cellWidget(r, 4)
+            if prev_btn:
+                prev_btn.setEnabled(os.path.isfile(pdf_path))
+
+            self.email_status_lbl.setText(
+                f"{'✓' if ok else '✗'}  {acct}: {msg}"
+            )
+            self.email_status_lbl.setStyleSheet(
+                f"color: {C['success'] if ok else C['danger']}; font-size:11px;"
+            )
+
+        worker.finished.connect(on_done)
+        worker.start()
+
+    def _period_end_date(self):
+        """Return the period end date from the export date picker."""
+        if hasattr(self, "date_to"):
+            return self.date_to.date().toPyDate()
+        from datetime import date
+        return date.today()
+
+    def _current_config(self) -> dict:
+        """Return the template config dict for the currently selected template."""
+        if hasattr(self, "_active_config"):
+            return self._active_config
+        with get_session() as session:
+            t = session.query(PdfTemplate).filter_by(is_default=True).first()
+            if t:
+                import json
+                return json.loads(t.template_json)
+        return {}
         if not current:
             return
         tmpl_id = current.data(Qt.ItemDataRole.UserRole)
@@ -545,6 +913,8 @@ class PdfTemplateView(QWidget):
             tmpl = session.query(PdfTemplate).filter_by(id=tmpl_id).first()
             if not tmpl:
                 return
+            import json as _json
+            self._active_config = _json.loads(tmpl.template_json)
             # Clear old editor
             while self._editor_layout.count():
                 item = self._editor_layout.takeAt(0)
@@ -599,10 +969,14 @@ class PdfTemplateView(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Choose Export Folder")
         if folder:
             self._export_dir = folder
+            self._last_export_dir = folder
             self.lbl_export_dir.setText(folder)
+            self.lbl_email_dir.setText(folder)
             self.btn_export.setEnabled(True)
             self.btn_export_single.setEnabled(True)
             self.btn_export_group.setEnabled(True)
+            from db.local_db import set_setting
+            set_setting("last_export_dir", folder)
 
     def _load_export_combos(self):
         """Populate the single-account and marketing-program combo boxes."""

@@ -761,6 +761,10 @@ class AccountDetailPanel(QWidget):
             phone_lbl = QLabel(a.phone)
             phone_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
             name_col.addWidget(phone_lbl)
+        if getattr(a, "email", None):
+            email_lbl = QLabel(f"✉  {a.email}")
+            email_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+            name_col.addWidget(email_lbl)
 
         info_layout.addLayout(name_col, stretch=3)
 
@@ -801,6 +805,25 @@ class AccountDetailPanel(QWidget):
         start_row.addWidget(start_lbl)
         start_row.addWidget(btn_edit_date)
         src_col.addLayout(start_row)
+
+        email_row = QHBoxLayout()
+        email_row.setSpacing(4)
+        current_email = getattr(a, "email", "") or ""
+        email_lbl = QLabel(current_email if current_email else "No email set")
+        email_lbl.setStyleSheet(
+            f"color: {C['text_muted']}; font-size:11px;"
+            + (" font-style:italic;" if not current_email else "")
+        )
+        btn_edit_email = QPushButton("✉")
+        btn_edit_email.setToolTip("Set email address")
+        btn_edit_email.setFixedSize(22, 20)
+        btn_edit_email.setStyleSheet("font-size:10px; padding: 0;")
+        btn_edit_email.clicked.connect(self._edit_email)
+        email_row.addStretch()
+        email_row.addWidget(email_lbl)
+        email_row.addWidget(btn_edit_email)
+        src_col.addLayout(email_row)
+
         info_layout.addLayout(src_col, stretch=1)
 
         self._layout.addWidget(info_frame)
@@ -1113,7 +1136,48 @@ class AccountDetailPanel(QWidget):
             )
             self._rebuild()
 
-    def _add_override(self):
+    def _edit_email(self):
+        if not self._account:
+            return
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QVBoxLayout
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Set Email Address")
+        dlg.setMinimumWidth(380)
+        dlg.setStyleSheet(f"background-color: {C['surface']}; color: {C['text']};")
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+        form = QFormLayout()
+        email_input = QLineEdit(getattr(self._account, "email", "") or "")
+        email_input.setPlaceholderText("dealer@example.com")
+        form.addRow("Email Address:", email_input)
+        layout.addLayout(form)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+        if dlg.exec():
+            new_email = email_input.text().strip()
+            old_email = getattr(self._account, "email", "") or ""
+            with get_session() as session:
+                acct = (
+                    session.query(Account)
+                    .filter_by(account_number=self._account.account_number)
+                    .first()
+                )
+                if acct:
+                    acct.email = new_email or None
+            log_audit(
+                "edit", "account", self._account.account_number,
+                f"Updated email for {self._account.account_number}",
+                old_value=old_email,
+                new_value=new_email,
+            )
+            self._rebuild()
+
+
         if not self._account:
             return
         dlg = OverrideDialog(self._account.account_number, parent=self)

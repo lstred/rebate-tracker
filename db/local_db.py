@@ -134,6 +134,7 @@ class Account(Base):
     zip1: Mapped[Optional[str]] = mapped_column(String(10))
     zip2: Mapped[Optional[str]] = mapped_column(String(10))
     phone: Mapped[Optional[str]] = mapped_column(String(30))
+    email: Mapped[Optional[str]] = mapped_column(String(255))
 
     source: Mapped[str] = mapped_column(String(20), nullable=False)  # 'manual' | 'marketing_program'
     marketing_program_id: Mapped[Optional[int]] = mapped_column(
@@ -415,11 +416,27 @@ def init_db() -> None:
         _seed_setting(session, "mysql_database", "dbcnqdrgsooaia")
         _seed_setting(session, "mysql_user", "nrfselec_wp404")
         _seed_setting(session, "mysql_password", "")  # entered via Settings UI
+        # Email (SMTP via Outlook / Office 365)
+        _seed_setting(session, "smtp_host", "smtp.office365.com")
+        _seed_setting(session, "smtp_port", "587")
+        _seed_setting(session, "smtp_user", "")
+        _seed_setting(session, "smtp_password", "")  # entered via Settings UI
+        _seed_setting(session, "smtp_from_name", "")
+        # UI theme
+        _seed_setting(session, "theme", "dark")
 
         # Migration: fix BACCT -> BACCT# if the old wrong default was seeded
         row = session.query(AppSetting).filter_by(key="bill_to_account_field").first()
         if row and row.value == "BACCT":
             row.value = "BACCT#"
+
+    # Migration: add email column to accounts
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE accounts ADD COLUMN email VARCHAR(255)"))
+            conn.commit()
+    except Exception:
+        pass  # Column already exists — no-op
 
     # Migration: add rebate_eligible_sales column to sales_cache if it doesn't exist
     from sqlalchemy import text

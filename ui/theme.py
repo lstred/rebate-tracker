@@ -3,21 +3,17 @@ ui/theme.py
 -----------
 Design system for the Rebate Tracker app.
 
-Dark professional theme:
-  • Base: very dark navy/slate
-  • Cards: slightly lighter surface
-  • Accent: electric blue
-  • Status: green / amber / red
-  • Typography: system-native sans-serif (Segoe UI on Windows)
+Supports dark (default) and light themes.
+Call apply_theme("dark"|"light") to build the `C` palette and `STYLESHEET`.
 """
 
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Color palette  (used both in QSS and in matplotlib charts)
+# Color palettes
 # ---------------------------------------------------------------------------
 
-C = {
+_DARK = {
     # Backgrounds
     "bg":          "#0D1117",
     "surface":     "#161B22",
@@ -47,15 +43,61 @@ C = {
     "sidebar":     "#0D1117",
     "sidebar_hov": "#161B22",
     "sidebar_sel": "#1c2433",
-    "sidebar_ind": "#388BFD",   # active indicator bar
+    "sidebar_ind": "#388BFD",
 }
 
+_LIGHT = {
+    # Backgrounds
+    "bg":          "#F0F2F5",
+    "surface":     "#FFFFFF",
+    "surface2":    "#F6F8FA",
+    "surface3":    "#EAECEF",
 
-# ---------------------------------------------------------------------------
-# Qt stylesheet (QSS)
-# ---------------------------------------------------------------------------
+    # Borders
+    "border":      "#D0D7DE",
+    "border_focus":"#2563EB",
 
-STYLESHEET = f"""
+    # Accents
+    "accent":      "#2563EB",
+    "accent_hov":  "#1D4ED8",
+    "accent_dim":  "#DBEAFE",
+
+    # Status
+    "success":     "#16A34A",
+    "warning":     "#D97706",
+    "danger":      "#DC2626",
+
+    # Text
+    "text":        "#1F2328",
+    "text_muted":  "#57606A",
+    "text_dim":    "#A8B0BC",
+
+    # Sidebar
+    "sidebar":     "#FFFFFF",
+    "sidebar_hov": "#F6F8FA",
+    "sidebar_sel": "#DBEAFE",
+    "sidebar_ind": "#2563EB",
+}
+
+# Active palette — mutable, starts as dark
+C: dict = dict(_DARK)
+
+
+def apply_theme(theme_name: str) -> str:
+    """
+    Update the global `C` palette and regenerate `STYLESHEET`.
+    Returns the full QSS string.
+    Call `QApplication.instance().setStyleSheet(apply_theme(...))`.
+    """
+    global C, STYLESHEET
+    C.clear()
+    C.update(_LIGHT if theme_name == "light" else _DARK)
+    STYLESHEET = _build_stylesheet()
+    return STYLESHEET
+
+
+def _build_stylesheet() -> str:
+    return f"""
 /* ── Global ─────────────────────────────────────────── */
 QWidget {{
     background-color: {C["bg"]};
@@ -436,6 +478,10 @@ QMessageBox QLabel {{
     color: {C["text"]};
 }}
 """
+
+
+# Build the initial dark stylesheet on import
+STYLESHEET: str = _build_stylesheet()
 
 
 # ---------------------------------------------------------------------------
