@@ -469,7 +469,7 @@ def get_dashboard_summary(
             results.append(
                 {
                     "account_number": acct.account_number,
-                    "account_name": acct.account_name or acct.account_number,
+                    "account_name": acct.account_name or "—",
                     "current_sales": current_sales,
                     "prior_year_sales": prior_sales,
                     "growth_amount": growth,

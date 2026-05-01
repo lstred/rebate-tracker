@@ -249,7 +249,6 @@ class StatementBuilder:
 
     def _dealer_info_section(self, account: Account, result: RebateResult) -> list:
         s = self._styles
-        name = account.account_name or account.account_number
         addr_lines = [account.address1, account.address2]
         city_line_parts = [
             p for p in [account.city, account.state, " ".join(filter(None, [account.zip1, account.zip2]))]
@@ -267,7 +266,10 @@ class StatementBuilder:
 
         left = [
             Paragraph("<b>Bill To:</b>", s["section_header"]),
-            Paragraph(f"<b>{name}</b>", s["body"]),
+        ]
+        if account.account_name:
+            left.append(Paragraph(f"<b>{account.account_name}</b>", s["body"]))
+        left += [
             *[Paragraph(l, s["body"]) for l in addr_lines if l],
             Paragraph(city_line, s["body"]),
             Paragraph(phone, s["body"]) if phone else Spacer(1, 1),

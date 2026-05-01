@@ -166,10 +166,7 @@ class TemplateEditorPanel(QWidget):
         btn_logo = QPushButton("Browse…")
         btn_logo.clicked.connect(self._browse_logo)
         btn_clear = QPushButton("Clear")
-        btn_clear.clicked.connect(lambda: (
-            self.logo_path_lbl.__setattr__("_logo_path", ""),
-            self.logo_path_lbl.setText("No logo selected"),
-        ))
+        btn_clear.clicked.connect(self._clear_logo)
         self._logo_path = cfg.get("logo_path", "")
         logo_layout.addWidget(btn_logo)
         logo_layout.addWidget(btn_clear)
@@ -219,6 +216,10 @@ class TemplateEditorPanel(QWidget):
         if path:
             self._logo_path = path
             self.logo_path_lbl.setText(path)
+
+    def _clear_logo(self):
+        self._logo_path = ""
+        self.logo_path_lbl.setText("No logo selected")
 
     def get_config(self) -> dict:
         return {

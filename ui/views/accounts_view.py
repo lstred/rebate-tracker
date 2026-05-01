@@ -765,7 +765,11 @@ class AccountsView(QWidget):
     def _populate_list(self, accounts: list[Account]):
         self.account_list.clear()
         for acct in accounts:
-            label = f"{acct.account_name or acct.account_number}\n{acct.account_number}"
+            # Always show account number first, name below (avoids duplication when name is null)
+            if acct.account_name:
+                label = f"{acct.account_number}\n{acct.account_name}"
+            else:
+                label = acct.account_number
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, acct.account_number)
             self.account_list.addItem(item)
@@ -839,6 +843,12 @@ class AccountsView(QWidget):
                         is_active=True,
                     )
                 )
+            # Immediately try to fetch account name (BNAME) from BILLTO
+            try:
+                from db.sync import sync_account_info
+                sync_account_info([data["account_number"]])
+            except Exception:
+                pass  # Non-fatal; run a full sync to populate name
             QMessageBox.information(
                 self, "Account Added",
                 f"Account {data['account_number']} added.\n"
