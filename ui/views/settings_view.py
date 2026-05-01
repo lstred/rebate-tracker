@@ -218,7 +218,7 @@ class SettingsView(QWidget):
             self.conn_status.setStyleSheet(f"color: {C['danger']};")
 
     def _save_field_settings(self):
-            set_setting("bill_to_account_field", self.bill_to_field.text().strip() or "BACCT#")
+        set_setting("bill_to_account_field", self.bill_to_field.text().strip() or "BACCT#")
         QMessageBox.information(self, "Saved", "Field settings saved.")
 
     def _clear_cache(self):
