@@ -78,21 +78,25 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
         acct_filter = f"AND CAST(o.[ACCOUNT#I] AS NVARCHAR) IN ({quoted})"
 
     return f"""
+        -- Pre-deduplicate direct-ship orders so the LEFT JOIN below never fans out.
+        -- DISTINCT ensures at most one row per ORDER# in dir_orders.
+        WITH dir_orders AS (
+            SELECT DISTINCT [H@REF#]
+            FROM dbo.OPENPO_H
+            WHERE [H@WARE] = 'DIR'
+        )
         SELECT
             CAST(o.[ACCOUNT#I] AS NVARCHAR(50))      AS account_number,
             CAST(o.INVOICE_DATE_YYYYMMDD AS BIGINT)  AS invoice_date_raw,
             SUM(o.ENTENDED_PRICE_NO_FUNDS)           AS total_sales,
             SUM(CASE
-                WHEN o.[{cc_field}] = '041' THEN 0
-                WHEN EXISTS (
-                    SELECT 1 FROM dbo.OPENPO_H ph
-                    WHERE ph.[H@REF#] = o.[ORDER#]
-                      AND ph.[H@WARE] = 'DIR'
-                ) THEN 0
+                WHEN o.[{cc_field}] = '041'    THEN 0
+                WHEN d.[H@REF#]     IS NOT NULL THEN 0
                 ELSE o.ENTENDED_PRICE_NO_FUNDS
             END)                                     AS rebate_eligible_sales
         FROM dbo._ORDERS o
         {item_join}
+        LEFT JOIN dir_orders d ON o.[ORDER#] = d.[H@REF#]
         WHERE
             ISNULL(o.[INVOICE#], 0) <> 0
             {cost_where}
