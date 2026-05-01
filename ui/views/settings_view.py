@@ -112,8 +112,8 @@ class SettingsView(QWidget):
         field_form = QFormLayout(field_group)
         field_form.setSpacing(10)
 
-        self.bill_to_field = QLineEdit(get_setting("bill_to_account_field", "BACCT"))
-        self.bill_to_field.setPlaceholderText("e.g. BACCT")
+        self.bill_to_field = QLineEdit(get_setting("bill_to_account_field", "BACCT#"))
+        self.bill_to_field.setPlaceholderText("e.g. BACCT#")
         field_form.addRow("BILL_TO account field:", self.bill_to_field)
 
         help_bill_to = QLabel("The column in dbo.BILL_TO that matches ACCOUNT#I in _ORDERS.")
@@ -218,7 +218,7 @@ class SettingsView(QWidget):
             self.conn_status.setStyleSheet(f"color: {C['danger']};")
 
     def _save_field_settings(self):
-        set_setting("bill_to_account_field", self.bill_to_field.text().strip() or "BACCT")
+            set_setting("bill_to_account_field", self.bill_to_field.text().strip() or "BACCT#")
         QMessageBox.information(self, "Saved", "Field settings saved.")
 
     def _clear_cache(self):

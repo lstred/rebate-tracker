@@ -93,7 +93,7 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
 
 
 def _account_info_query(account_numbers: list[str]) -> str:
-    bt_field = get_setting("bill_to_account_field", "BACCT")
+    bt_field = get_setting("bill_to_account_field", "BACCT#")
     quoted = ", ".join(f"'{a}'" for a in account_numbers)
     return f"""
         SELECT

@@ -396,9 +396,14 @@ def init_db() -> None:
         # Seed default settings
         _seed_setting(session, "date_range_start", "")
         _seed_setting(session, "date_range_end", "")
-        _seed_setting(session, "bill_to_account_field", "BACCT")  # Verify this field name
+        _seed_setting(session, "bill_to_account_field", "BACCT#")  # BILLTO column that holds account number
         _seed_setting(session, "cost_center_filter", "orders_field")  # 'item_join' | 'orders_field'
         _seed_setting(session, "cost_center_orders_field", "COST_CENTER")  # If cost_center_filter=orders_field
+
+        # Migration: fix BACCT -> BACCT# if the old wrong default was seeded
+        row = session.query(AppSetting).filter_by(key="bill_to_account_field").first()
+        if row and row.value == "BACCT":
+            row.value = "BACCT#"
 
 
 def _seed_setting(session: Session, key: str, default_value: str) -> None:
