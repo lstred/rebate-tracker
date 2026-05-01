@@ -86,6 +86,24 @@ from ui.theme import C
 # Gallery utilities
 # ---------------------------------------------------------------------------
 
+def _current_rebate_year_start(start_date: date, reference: date) -> date:
+    """
+    The most recent anniversary of start_date that is <= reference.
+    This is the START of the current rebate year, e.g. if start_date=2024-07-03
+    and reference=2026-05-01 the current rebate year started 2025-07-03.
+    """
+    try:
+        candidate = start_date.replace(year=reference.year)
+    except ValueError:          # Feb 29 in non-leap year
+        candidate = date(reference.year, 3, 1)
+    if candidate <= reference:
+        return candidate
+    try:
+        return start_date.replace(year=reference.year - 1)
+    except ValueError:
+        return date(reference.year - 1, 3, 1)
+
+
 def _days_to_next_anniversary(start_date: date) -> int:
     """Days until start_date's next yearly anniversary (= rebate year renewal)."""
     today = date.today()
@@ -365,20 +383,22 @@ class GalleryLoader(QThread):
 
         for acct in self._accounts:
             try:
-                p_start, p_end = get_account_period(acct, self._end)
-                current = get_period_sales(acct.account_number, p_start, p_end)
+                # Use the current rebate year start (most recent anniversary)
+                # so elapsed_days is always within the current 12-month window
+                ry_start = _current_rebate_year_start(acct.start_date, today)
+                current = get_period_sales(acct.account_number, ry_start, today)
 
                 tiers: list = []
                 asn = assignments.get(acct.account_number)
                 if asn and asn.rebate_structure_id in structures:
                     tiers = structures[asn.rebate_structure_id].get_tiers()
 
-                elapsed = max(1, (today - p_start).days)
+                elapsed = max(1, (today - ry_start).days)
                 try:
-                    fy_end = p_start.replace(year=p_start.year + 1)
+                    fy_end = ry_start.replace(year=ry_start.year + 1)
                 except ValueError:
-                    fy_end = p_start.replace(year=p_start.year + 1, day=28)
-                full_days = max(1, (fy_end - p_start).days)
+                    fy_end = ry_start.replace(year=ry_start.year + 1, day=28)
+                full_days = max(1, (fy_end - ry_start).days)
                 projected = current * full_days / elapsed
 
                 result[acct.account_number] = {
@@ -438,15 +458,19 @@ class DetailLoader(QThread):
             self.account.account_number, prior_start, prior_end
         )
 
-        # Straight-line projection to the end of the FULL rebate year (not the picker end)
+        # Straight-line projection using the CURRENT rebate year start (most recent
+        # anniversary), so elapsed_days is always within the current 12-month window.
         today = date.today()
-        elapsed_days = max(1, (today - effective_start).days)
+        ry_start = _current_rebate_year_start(self.account.start_date, today)
+        elapsed_days = max(1, (today - ry_start).days)
         try:
-            full_year_end = effective_start.replace(year=effective_start.year + 1)
+            full_year_end = ry_start.replace(year=ry_start.year + 1)
         except ValueError:  # Feb 29 in non-leap year
-            full_year_end = effective_start.replace(year=effective_start.year + 1, day=28)
-        full_year_days = max(1, (full_year_end - effective_start).days)
-        projected_sales = current_sales * full_year_days / elapsed_days
+            full_year_end = ry_start.replace(year=ry_start.year + 1, day=28)
+        full_year_days = max(1, (full_year_end - ry_start).days)
+        # Use current_sales for the same window (current rebate year to today)
+        ry_sales = get_period_sales(self.account.account_number, ry_start, today)
+        projected_sales = ry_sales * full_year_days / elapsed_days
 
         # Monthly: only current rebate year, with prior year side-by-side
         monthly = get_monthly_sales(
@@ -878,10 +902,15 @@ class AccountDetailPanel(QWidget):
         monthly_tbl.setHorizontalHeaderLabels(
             ["Month", "Current Year Sales", "Prior Year Sales", "YoY Growth", "CY Cumulative"]
         )
-        monthly_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        _mh = monthly_tbl.horizontalHeader()
+        _mh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        _mh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        _mh.setStretchLastSection(False)
         monthly_tbl.setAlternatingRowColors(True)
         monthly_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         monthly_tbl.verticalHeader().setVisible(False)
+        monthly_tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        monthly_tbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         partial_note_text = ""
         for m in d.get("monthly", []):
             row = monthly_tbl.rowCount()
@@ -899,6 +928,14 @@ class AccountDetailPanel(QWidget):
             monthly_tbl.setItem(row, 4, QTableWidgetItem(f"${m['cumulative']:,.2f}"))
             if m.get("partial_note") and not partial_note_text:
                 partial_note_text = m["partial_note"]
+        # Expand to fit all rows so the outer scroll handles navigation
+        monthly_tbl.resizeRowsToContents()
+        _row_h = monthly_tbl.rowHeight(0) if monthly_tbl.rowCount() else 26
+        monthly_tbl.setMinimumHeight(
+            monthly_tbl.horizontalHeader().height()
+            + _row_h * monthly_tbl.rowCount()
+            + 6
+        )
         mt_layout.addWidget(monthly_tbl)
         if partial_note_text:
             note_lbl = QLabel(f"* {partial_note_text}")
@@ -913,9 +950,15 @@ class AccountDetailPanel(QWidget):
             tt_layout.setContentsMargins(4, 8, 4, 4)
             tier_tbl = QTableWidget(0, 4)
             tier_tbl.setHorizontalHeaderLabels(["Tier", "Rate", "Applicable Sales", "Rebate"])
+            _th = tier_tbl.horizontalHeader()
+            _th.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            _th.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            _th.setStretchLastSection(False)
             tier_tbl.setAlternatingRowColors(True)
             tier_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
             tier_tbl.verticalHeader().setVisible(False)
+            tier_tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            tier_tbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             for tr in rr.tier_results:
                 row = tier_tbl.rowCount()
                 tier_tbl.insertRow(row)
@@ -932,6 +975,14 @@ class AccountDetailPanel(QWidget):
             total_item = QTableWidgetItem(f"${rr.rebate_amount:,.2f}")
             total_item.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
             tier_tbl.setItem(row, 3, total_item)
+            # Expand to fit all rows
+            tier_tbl.resizeRowsToContents()
+            _row_h = tier_tbl.rowHeight(0) if tier_tbl.rowCount() else 26
+            tier_tbl.setMinimumHeight(
+                tier_tbl.horizontalHeader().height()
+                + _row_h * tier_tbl.rowCount()
+                + 6
+            )
             tt_layout.addWidget(tier_tbl)
             tabs.addTab(tier_tab, "Tier Breakdown")
 

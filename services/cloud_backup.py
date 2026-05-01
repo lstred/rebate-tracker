@@ -93,8 +93,18 @@ def _connect():
     try:
         conn = pymysql.connect(**cfg)
     except pymysql.err.OperationalError as exc:
-        # Scrub credentials from error message before re-raising
-        raise RuntimeError(f"MySQL connection failed: {exc.args[1]}") from exc
+        raw = exc.args[1] if exc.args else str(exc)
+        if "is not allowed to connect" in raw:
+            # The MySQL user doesn't have permission to connect from this network's
+            # outgoing IP.  This is fixed on the server side (cPanel / phpMyAdmin).
+            host_hint = cfg.get("host", "the MySQL server")
+            raise RuntimeError(
+                f"MySQL connection failed: {raw}\n\n"
+                f"Your network's outgoing IP address is not authorized on {host_hint}. "
+                f"To fix this, log in to cPanel → MySQL Databases → Remote Database Access Hosts "
+                f"and add % (allow all) or your specific public IP address."
+            ) from exc
+        raise RuntimeError(f"MySQL connection failed: {raw}") from exc
     return conn
 
 
