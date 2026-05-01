@@ -197,6 +197,7 @@ class Sidebar(QWidget):
         ("👤", "Accounts"),
         ("💰", "Rebate Structures"),
         ("📄", "PDF Templates"),
+        ("📋", "Audit Log"),
     ]
     _BOTTOM_ITEMS = [
         ("⚙", "Settings"),
@@ -332,6 +333,7 @@ class MainWindow(QMainWindow):
         from ui.views.accounts_view import AccountsView
         from ui.views.rebate_structures_view import RebateStructuresView
         from ui.views.pdf_template_view import PdfTemplateView
+        from ui.views.audit_log_view import AuditLogView
         from ui.views.settings_view import SettingsView
 
         start, end = self.top_bar.get_date_range()
@@ -340,6 +342,7 @@ class MainWindow(QMainWindow):
         self.view_accounts = AccountsView(start, end)
         self.view_rebate = RebateStructuresView()
         self.view_pdf = PdfTemplateView(start, end)
+        self.view_audit = AuditLogView()
         self.view_settings = SettingsView()
 
         for view in [
@@ -347,6 +350,7 @@ class MainWindow(QMainWindow):
             self.view_accounts,
             self.view_rebate,
             self.view_pdf,
+            self.view_audit,
             self.view_settings,
         ]:
             self.stack.addWidget(view)
@@ -362,6 +366,9 @@ class MainWindow(QMainWindow):
 
     def _on_nav_changed(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
+        # Refresh audit log whenever it becomes visible (index 4)
+        if index == 4:
+            self.view_audit.refresh()
 
     def _on_date_range_changed(self, start: date, end: date) -> None:
         self.view_dashboard.set_date_range(start, end)

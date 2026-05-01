@@ -59,6 +59,7 @@ from db.local_db import (
     RebateStructure,
     SalesOverride,
     get_session,
+    log_audit,
 )
 from services.rebate_calculator import (
     Tier,
@@ -400,15 +401,26 @@ class AccountDetailPanel(QWidget):
 
         info_layout.addLayout(name_col, stretch=3)
 
-        # Source badge
+        # Source badge + start date + edit button
         src_col = QVBoxLayout()
         src_col.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         src_badge = QLabel("Marketing Program" if a.source == "marketing_program" else "Manual")
         src_badge.setProperty("class", "tag-success" if a.source == "marketing_program" else "tag-warning")
         src_col.addWidget(src_badge)
+
+        start_row = QHBoxLayout()
+        start_row.setSpacing(4)
         start_lbl = QLabel(f"Start: {a.start_date.strftime('%m/%d/%Y')}")
         start_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
-        src_col.addWidget(start_lbl)
+        btn_edit_date = QPushButton("Edit")
+        btn_edit_date.setProperty("class", "primary")
+        btn_edit_date.setFixedHeight(20)
+        btn_edit_date.setStyleSheet("font-size:10px; padding: 0 6px;")
+        btn_edit_date.clicked.connect(self._edit_start_date)
+        start_row.addStretch()
+        start_row.addWidget(start_lbl)
+        start_row.addWidget(btn_edit_date)
+        src_col.addLayout(start_row)
         info_layout.addLayout(src_col, stretch=1)
 
         self._layout.addWidget(info_frame)
@@ -608,6 +620,49 @@ class AccountDetailPanel(QWidget):
             act_layout.addWidget(btn_del)
             self._override_tbl.setCellWidget(row, 4, act_widget)
 
+    def _edit_start_date(self):
+        if not self._account:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit Start Date")
+        dlg.setMinimumWidth(300)
+        dlg.setStyleSheet(f"background-color: {C['surface']}; color: {C['text']};")
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+        form = QFormLayout()
+        date_edit = QDateEdit(
+            QDate.fromString(self._account.start_date.isoformat(), "yyyy-MM-dd")
+        )
+        date_edit.setCalendarPopup(True)
+        date_edit.setDisplayFormat("MM/dd/yyyy")
+        form.addRow("Start Date:", date_edit)
+        layout.addLayout(form)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+        if dlg.exec():
+            old_date = self._account.start_date.isoformat()
+            new_date = date_edit.date().toPyDate()
+            with get_session() as session:
+                acct = (
+                    session.query(Account)
+                    .filter_by(account_number=self._account.account_number)
+                    .first()
+                )
+                if acct:
+                    acct.start_date = new_date
+            log_audit(
+                "edit", "account", self._account.account_number,
+                f"Changed start date for {self._account.account_number}",
+                old_value=old_date,
+                new_value=new_date.isoformat(),
+            )
+            self._rebuild()
+
     def _add_override(self):
         if not self._account:
             return
@@ -625,6 +680,14 @@ class AccountDetailPanel(QWidget):
                         notes=data["notes"],
                     )
                 )
+            log_audit(
+                "add", "override", self._account.account_number,
+                f"Added prior year override for {self._account.account_number}",
+                new_value=(
+                    f"{data['period_start']} – {data['period_end']}: "
+                    f"${data['amount']:,.2f} ({data['mode']})"
+                ),
+            )
             self._rebuild()
 
     def _edit_override(self, ov: dict):
@@ -641,6 +704,18 @@ class AccountDetailPanel(QWidget):
                     existing.amount = data["amount"]
                     existing.mode = data["mode"]
                     existing.notes = data["notes"]
+            log_audit(
+                "edit", "override", self._account.account_number,
+                f"Edited prior year override for {self._account.account_number}",
+                old_value=(
+                    f"{ov['period_start']} – {ov['period_end']}: "
+                    f"${ov['amount']:,.2f} ({ov['mode']})"
+                ),
+                new_value=(
+                    f"{data['period_start']} – {data['period_end']}: "
+                    f"${data['amount']:,.2f} ({data['mode']})"
+                ),
+            )
             self._rebuild()
 
     def _delete_override(self, override_id: int):
@@ -649,7 +724,19 @@ class AccountDetailPanel(QWidget):
             == QMessageBox.StandardButton.Yes
         ):
             with get_session() as session:
-                session.query(SalesOverride).filter_by(id=override_id).delete()
+                ov = session.query(SalesOverride).filter_by(id=override_id).first()
+                if ov:
+                    old_desc = (
+                        f"{ov.period_start} – {ov.period_end}: "
+                        f"${ov.amount:,.2f} ({ov.mode})"
+                    )
+                    session.delete(ov)
+            log_audit(
+                "delete", "override",
+                self._account.account_number if self._account else "",
+                f"Deleted prior year override",
+                old_value=old_desc,
+            )
             self._rebuild()
 
     def _assign_structure(self):
@@ -674,6 +761,7 @@ class AccountDetailPanel(QWidget):
         )
         if ok and chosen:
             struct_id = ids[names.index(chosen)]
+            old_struct_name = None
             with get_session() as session:
                 existing = (
                     session.query(AccountRebateAssignment)
@@ -681,6 +769,9 @@ class AccountDetailPanel(QWidget):
                     .first()
                 )
                 if existing:
+                    # Capture old structure name for audit
+                    old_s = session.query(RebateStructure).filter_by(id=existing.rebate_structure_id).first()
+                    old_struct_name = old_s.name if old_s else str(existing.rebate_structure_id)
                     existing.rebate_structure_id = struct_id
                 else:
                     session.add(
@@ -689,6 +780,12 @@ class AccountDetailPanel(QWidget):
                             rebate_structure_id=struct_id,
                         )
                     )
+            log_audit(
+                "assign", "rebate_structure", self._account.account_number,
+                f"Assigned rebate structure '{chosen}' to {self._account.account_number}",
+                old_value=old_struct_name,
+                new_value=chosen,
+            )
             self._rebuild()
 
 
@@ -823,6 +920,7 @@ class AccountsView(QWidget):
                 "Run a data refresh to populate accounts."
             )
         elif data["account_number"]:
+            reactivated = False
             with get_session() as session:
                 existing = (
                     session.query(Account)
@@ -830,30 +928,55 @@ class AccountsView(QWidget):
                     .first()
                 )
                 if existing:
-                    QMessageBox.information(
-                        self, "Already Tracked",
-                        f"Account {data['account_number']} is already tracked."
+                    if existing.is_active:
+                        QMessageBox.information(
+                            self, "Already Tracked",
+                            f"Account {data['account_number']} is already tracked."
+                        )
+                        return
+                    else:
+                        # Reactivate previously removed account
+                        existing.is_active = True
+                        existing.start_date = data["start_date"]
+                        reactivated = True
+                else:
+                    session.add(
+                        Account(
+                            account_number=data["account_number"],
+                            source="manual",
+                            start_date=data["start_date"],
+                            is_active=True,
+                        )
                     )
-                    return
-                session.add(
-                    Account(
-                        account_number=data["account_number"],
-                        source="manual",
-                        start_date=data["start_date"],
-                        is_active=True,
-                    )
-                )
             # Immediately try to fetch account name (BNAME) from BILLTO
             try:
                 from db.sync import sync_account_info
                 sync_account_info([data["account_number"]])
             except Exception:
                 pass  # Non-fatal; run a full sync to populate name
-            QMessageBox.information(
-                self, "Account Added",
-                f"Account {data['account_number']} added.\n"
-                "Run a data refresh to load sales data."
-            )
+
+            if reactivated:
+                log_audit(
+                    "reactivate", "account", data["account_number"],
+                    f"Reactivated account {data['account_number']} with start date {data['start_date'].isoformat()}",
+                    new_value=data["start_date"].isoformat(),
+                )
+                QMessageBox.information(
+                    self, "Account Reactivated",
+                    f"Account {data['account_number']} has been reactivated.\n"
+                    "Run a data refresh to load sales data."
+                )
+            else:
+                log_audit(
+                    "add", "account", data["account_number"],
+                    f"Added account {data['account_number']} with start date {data['start_date'].isoformat()}",
+                    new_value=data["start_date"].isoformat(),
+                )
+                QMessageBox.information(
+                    self, "Account Added",
+                    f"Account {data['account_number']} added.\n"
+                    "Run a data refresh to load sales data."
+                )
         else:
             QMessageBox.warning(self, "Invalid Input", "Please enter an account number or BCCODE.")
             return
@@ -877,6 +1000,10 @@ class AccountsView(QWidget):
                 acct = session.query(Account).filter_by(account_number=acct_no).first()
                 if acct:
                     acct.is_active = False
+            log_audit(
+                "remove", "account", acct_no,
+                f"Removed account {acct_no} from tracking (data retained)",
+            )
             self._load_accounts()
 
     def set_date_range(self, start: date, end: date):

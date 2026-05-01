@@ -342,6 +342,23 @@ class AppSetting(Base):
         return f"<AppSetting {self.key!r}={self.value!r}>"
 
 
+class AuditLog(Base):
+    """Append-only audit trail of all user-initiated changes."""
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    action: Mapped[str] = mapped_column(String(50))         # 'add' | 'remove' | 'edit' | 'assign' | ...
+    entity_type: Mapped[str] = mapped_column(String(50))    # 'account' | 'override' | 'structure' | ...
+    entity_id: Mapped[Optional[str]] = mapped_column(String(200))  # account_number, override id, etc.
+    description: Mapped[str] = mapped_column(Text)
+    old_value: Mapped[Optional[str]] = mapped_column(Text)
+    new_value: Mapped[Optional[str]] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return f"<AuditLog {self.timestamp} {self.action} {self.entity_type} {self.entity_id!r}>"
+
+
 # ---------------------------------------------------------------------------
 # DB initialization
 # ---------------------------------------------------------------------------
@@ -406,3 +423,26 @@ def set_setting(key: str, value: str) -> None:
             row.value = value
         else:
             session.add(AppSetting(key=key, value=value))
+
+
+def log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    description: str,
+    old_value: Optional[str] = None,
+    new_value: Optional[str] = None,
+) -> None:
+    """Append one row to the audit log. Always opens its own session."""
+    try:
+        with get_session() as session:
+            session.add(AuditLog(
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                description=description,
+                old_value=old_value,
+                new_value=new_value,
+            ))
+    except Exception:
+        pass  # Audit logging must never crash the app

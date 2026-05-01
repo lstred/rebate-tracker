@@ -5,6 +5,7 @@ from db.local_db import (
     Account,
     AccountRebateAssignment,
     AppSetting,
+    AuditLog,
     MarketingProgram,
     PdfTemplate,
     RebateStructure,
@@ -21,4 +22,5 @@ __all__ = [
     "AccountRebateAssignment",
     "PdfTemplate",
     "AppSetting",
+    "AuditLog",
 ]
