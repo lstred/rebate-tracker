@@ -197,6 +197,8 @@ class SalesCache(Base):
     account_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     invoice_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     total_sales: Mapped[float] = mapped_column(Float, nullable=False)
+    # Sales eligible for rebate payment (excludes unfinished wood COST_CENTER=041 and direct-ship H@WARE=DIR)
+    rebate_eligible_sales: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     def __repr__(self) -> str:
@@ -404,6 +406,21 @@ def init_db() -> None:
         row = session.query(AppSetting).filter_by(key="bill_to_account_field").first()
         if row and row.value == "BACCT":
             row.value = "BACCT#"
+
+    # Migration: add rebate_eligible_sales column to sales_cache if it doesn't exist
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "ALTER TABLE sales_cache ADD COLUMN rebate_eligible_sales REAL NOT NULL DEFAULT 0"
+            ))
+            # Seed existing rows: treat all historical sales as fully eligible until next sync
+            conn.execute(text(
+                "UPDATE sales_cache SET rebate_eligible_sales = total_sales WHERE rebate_eligible_sales = 0"
+            ))
+            conn.commit()
+    except Exception:
+        pass  # Column already exists — no-op
 
 
 def _seed_setting(session: Session, key: str, default_value: str) -> None:

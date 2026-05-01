@@ -124,16 +124,28 @@ def calculate_tiered_rebate(
     growth: float,
     tiers: list[Tier],
     structure_type: str = "tiered",
+    eligible_sales: Optional[float] = None,
+    eligible_growth: Optional[float] = None,
 ) -> tuple[float, list[TierResult], list[FreightQualification], Optional[int]]:
     """
     Calculate rebate for a given sales/growth amount against a list of tiers.
-    Tiers are split by applies_to: sales, growth, freight.
+
+    Threshold qualification uses full sales/growth (includes non-rebatable items).
+    Rate application uses eligible_sales/eligible_growth — these exclude
+    unfinished wood (COST_CENTER=041) and direct-ship orders (H@WARE=DIR).
+    If eligible values are not provided they default to the full amounts (backward compat).
 
     Returns:
         (total_rebate, tier_results, freight_qualifications, highest_tier_index_1_based)
     """
     if not tiers:
         return 0.0, [], [], None
+
+    # Default eligible = full amount (backward compat when not provided)
+    if eligible_sales is None:
+        eligible_sales = sales
+    if eligible_growth is None:
+        eligible_growth = growth
 
     # Separate by type
     sales_tiers   = [t for t in tiers if t.applies_to == "sales"]
@@ -145,7 +157,7 @@ def calculate_tiered_rebate(
     total_rebate = 0.0
     highest_applied = None
 
-    def _run_tiers(amount: float, tier_subset: list[Tier], applies_label: str):
+    def _run_tiers(amount: float, eligible_amount: float, tier_subset: list[Tier], applies_label: str):
         nonlocal total_rebate, highest_applied
         if not tier_subset or amount <= 0:
             return
@@ -153,6 +165,8 @@ def calculate_tiered_rebate(
         applicable = [(i, t) for i, t in enumerate(sorted_t) if amount >= t.threshold]
         if not applicable:
             return
+        # Fraction of sales that are rebate-eligible (used to prorate forward_only brackets)
+        elig_frac = (eligible_amount / amount) if amount > 0 else 1.0
         running = 0.0
         local_results: list[TierResult] = []
         for tier_idx, tier in applicable:
@@ -162,19 +176,22 @@ def calculate_tiered_rebate(
             else:
                 bracket_end = amount
             bracket_sales = bracket_end - tier.threshold
+            bracket_eligible = bracket_sales * elig_frac
             if tier.mode == "dollar_one":
-                running = amount * tier.rate
+                # Rate applies to ALL eligible sales from dollar one
+                running = eligible_amount * tier.rate
                 local_results = [TierResult(
                     tier_number=tier_idx + 1,
                     threshold=tier.threshold,
                     rate=tier.rate,
                     mode=tier.mode,
                     applies_to=applies_label,
-                    applicable_sales=amount,
+                    applicable_sales=eligible_amount,
                     rebate_contribution=running,
                 )]
             else:
-                contribution = bracket_sales * tier.rate
+                # Rate applies to eligible portion of the bracket above threshold
+                contribution = bracket_eligible * tier.rate
                 running += contribution
                 local_results.append(TierResult(
                     tier_number=tier_idx + 1,
@@ -182,7 +199,7 @@ def calculate_tiered_rebate(
                     rate=tier.rate,
                     mode=tier.mode,
                     applies_to=applies_label,
-                    applicable_sales=bracket_sales,
+                    applicable_sales=bracket_eligible,
                     rebate_contribution=contribution,
                 ))
             highest_idx = applicable[-1][0] + 1
@@ -191,10 +208,10 @@ def calculate_tiered_rebate(
         total_rebate += round(running, 2)
         all_tier_results.extend(local_results)
 
-    _run_tiers(sales,  sales_tiers,  "sales")
-    _run_tiers(growth, growth_tiers, "growth")
+    _run_tiers(sales,  eligible_sales,  sales_tiers,  "sales")
+    _run_tiers(growth, eligible_growth, growth_tiers, "growth")
 
-    # Freight: just check qualification
+    # Freight: qualification based on total sales (threshold check)
     for i, ft in enumerate(sorted(freight_tiers, key=lambda t: t.threshold)):
         if sales >= ft.threshold:
             freight_quals.append(FreightQualification(
@@ -233,32 +250,31 @@ def get_period_sales(
     session=None,
 ) -> float:
     """
-    Sum sales from the local SalesCache for a given account and date range.
+    Sum total_sales from the local SalesCache for a given account and date range.
     Checks for SalesOverride records and applies them.
+    Returns total_sales (including COST_CENTER=041 and direct-ship items).
+    """
+    total, _ = get_period_both_sales(account_number, period_start, period_end, session)
+    return total
+
+
+def get_period_both_sales(
+    account_number: str,
+    period_start: date,
+    period_end: date,
+    session=None,
+) -> tuple[float, float]:
+    """
+    Return (total_sales, rebate_eligible_sales) for an account and period.
+    total_sales          — all synced sales (used for threshold/tier qualification).
+    rebate_eligible_sales — excludes unfinished wood (COST_CENTER=041) and
+                            direct-ship orders (OPENPO_H.H@WARE=DIR).
+    Applies SalesOverride when present; override amount treated as fully eligible.
     """
     own_session = session is None
-    if own_session:
-        from contextlib import contextmanager
-
-        @contextmanager
-        def ctx():
-            with get_session() as s:
-                yield s
-
-        cm = ctx()
-    else:
-        from contextlib import contextmanager
-
-        @contextmanager
-        def cm_existing():
-            yield session
-
-        cm = cm_existing()
-
     with (get_session() if own_session else _null_ctx(session)) as s:
         the_session = s if own_session else session
 
-        # Check for override
         override = (
             the_session.query(SalesOverride)
             .filter(
@@ -269,7 +285,7 @@ def get_period_sales(
             .first()
         )
 
-        raw_sales = (
+        raw_rows = (
             the_session.query(SalesCache)
             .filter(
                 SalesCache.account_number == account_number,
@@ -278,15 +294,17 @@ def get_period_sales(
             )
             .all()
         )
-        sql_total = sum(r.total_sales for r in raw_sales)
+
+        sql_total = sum(r.total_sales for r in raw_rows)
+        sql_eligible = sum(r.rebate_eligible_sales for r in raw_rows)
 
         if override:
             if override.mode == "replace":
-                return override.amount
+                return override.amount, override.amount
             else:  # add
-                return sql_total + override.amount
+                return sql_total + override.amount, sql_eligible + override.amount
 
-        return sql_total
+        return sql_total, sql_eligible
 
 
 from contextlib import contextmanager
@@ -329,8 +347,12 @@ def calculate_account_rebate(
     prior_start, prior_end = get_prior_year_period(effective_start, effective_end)
 
     with get_session() as session:
-        current_sales = get_period_sales(account.account_number, effective_start, effective_end, session)
-        prior_sales   = get_period_sales(account.account_number, prior_start, prior_end, session)
+        current_sales, current_eligible = get_period_both_sales(
+            account.account_number, effective_start, effective_end, session
+        )
+        prior_sales, prior_eligible = get_period_both_sales(
+            account.account_number, prior_start, prior_end, session
+        )
 
         override = (
             session.query(SalesOverride)
@@ -345,9 +367,12 @@ def calculate_account_rebate(
         override_note = f"Override ({override.mode}): ${override.amount:,.2f}" if override else ""
 
     growth = max(0.0, current_sales - prior_sales)
+    eligible_growth = max(0.0, current_eligible - prior_eligible)
 
     rebate, tier_results, freight_quals, highest = calculate_tiered_rebate(
-        current_sales, growth, tiers, structure.structure_type
+        current_sales, growth, tiers, structure.structure_type,
+        eligible_sales=current_eligible,
+        eligible_growth=eligible_growth,
     )
 
     return RebateResult(
@@ -376,13 +401,24 @@ def get_monthly_sales(
     account_number: str,
     period_start: date,
     period_end: date,
+    include_prior_year: bool = False,
 ) -> list[dict]:
     """
     Return a list of monthly sales totals for the given account and period.
-    Each entry: {"year": int, "month": int, "label": str, "sales": float, "cumulative": float}
+
+    Each entry:
+        year, month, label          — calendar identifiers / display string
+        display_label               — label with "*" appended if first-month partial
+        partial_note                — e.g. "Rebate year starts 05/15/2025" for first partial month
+        sales                       — total_sales for the month (incl. unfinished/direct-ship)
+        eligible_sales              — rebate_eligible_sales (excl. unfinished/direct-ship)
+        cumulative                  — running total of sales
+        prior_sales, prior_eligible — prior-year equivalents (0.0 when include_prior_year=False)
     """
+    import calendar as _cal
+
     with get_session() as session:
-        rows = (
+        cy_rows = (
             session.query(SalesCache)
             .filter(
                 SalesCache.account_number == account_number,
@@ -393,24 +429,61 @@ def get_monthly_sales(
             .all()
         )
 
-    # Aggregate by year-month
-    monthly: dict[tuple[int, int], float] = {}
-    for r in rows:
+        # Prior-year rows indexed by (CY_year, CY_month) — PY date + 1 year = CY date
+        prior_map: dict[tuple[int, int], tuple[float, float]] = {}
+        if include_prior_year:
+            py_start, py_end = get_prior_year_period(period_start, period_end)
+            py_rows = (
+                session.query(SalesCache)
+                .filter(
+                    SalesCache.account_number == account_number,
+                    SalesCache.invoice_date >= py_start,
+                    SalesCache.invoice_date <= py_end,
+                )
+                .all()
+            )
+            for r in py_rows:
+                cy_yr = r.invoice_date.year + 1
+                mo = r.invoice_date.month
+                prev_tot, prev_elig = prior_map.get((cy_yr, mo), (0.0, 0.0))
+                prior_map[(cy_yr, mo)] = (
+                    prev_tot + r.total_sales,
+                    prev_elig + r.rebate_eligible_sales,
+                )
+
+    # Aggregate current year by (year, month)
+    monthly: dict[tuple[int, int], tuple[float, float]] = {}
+    for r in cy_rows:
         key = (r.invoice_date.year, r.invoice_date.month)
-        monthly[key] = monthly.get(key, 0.0) + r.total_sales
+        prev_tot, prev_elig = monthly.get(key, (0.0, 0.0))
+        monthly[key] = (prev_tot + r.total_sales, prev_elig + r.rebate_eligible_sales)
 
     result = []
     cumulative = 0.0
-    import calendar
-    for (yr, mo), total in sorted(monthly.items()):
+    first = True
+    for (yr, mo), (total, eligible) in sorted(monthly.items()):
         cumulative += total
+        label = f"{_cal.month_abbr[mo]} {yr}"
+        partial_note = ""
+        display_label = label
+        if first and period_start.day > 1:
+            partial_note = f"Rebate year starts {period_start.strftime('%m/%d/%Y')}"
+            display_label = f"{label} *"
+        first = False
+
+        py_total, py_eligible = prior_map.get((yr, mo), (0.0, 0.0))
         result.append(
             {
                 "year": yr,
                 "month": mo,
-                "label": f"{calendar.month_abbr[mo]} {yr}",
+                "label": label,
+                "display_label": display_label,
+                "partial_note": partial_note,
                 "sales": round(total, 2),
+                "eligible_sales": round(eligible, 2),
                 "cumulative": round(cumulative, 2),
+                "prior_sales": round(py_total, 2),
+                "prior_eligible": round(py_eligible, 2),
             }
         )
     return result
@@ -445,13 +518,14 @@ def get_dashboard_summary(
             effective_start, effective_end = get_account_period(acct, period_end)
             prior_start, prior_end = get_prior_year_period(effective_start, effective_end)
 
-            current_sales = get_period_sales(
+            current_sales, current_eligible = get_period_both_sales(
                 acct.account_number, effective_start, effective_end, session
             )
-            prior_sales = get_period_sales(
+            prior_sales, prior_eligible = get_period_both_sales(
                 acct.account_number, prior_start, prior_end, session
             )
             growth = max(0.0, current_sales - prior_sales)
+            eligible_growth = max(0.0, current_eligible - prior_eligible)
 
             assignment = assignments.get(acct.account_number)
             rebate_amount = 0.0
@@ -463,7 +537,9 @@ def get_dashboard_summary(
                 structure_name = struct.name
                 tiers = [Tier.from_dict(t, struct.structure_type) for t in struct.get_tiers()]
                 rebate_amount, _, _, tier_reached = calculate_tiered_rebate(
-                    current_sales, growth, tiers, struct.structure_type
+                    current_sales, growth, tiers, struct.structure_type,
+                    eligible_sales=current_eligible,
+                    eligible_growth=eligible_growth,
                 )
 
             results.append(

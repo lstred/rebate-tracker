@@ -54,18 +54,20 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
       • [ACCOUNT#I]                 NOT IN ('1')
       • INVOICE_DATE_YYYYMMDD       > 0  (guards against null/zero dates)
 
-    Returns one row per (account_number, invoice_date) with SUM(sales).
+    Returns one row per (account_number, invoice_date) with:
+      total_sales          — all sales passing the above filter (used for threshold/tier qualification)
+      rebate_eligible_sales — excludes COST_CENTER=041 (unfinished wood) and
+                              direct-ship orders where OPENPO_H.[H@WARE] = 'DIR'
+                              (these count toward tiers but no rebate is paid on them)
     """
     cost_filter_mode = get_setting("cost_center_filter", "item_join")
+    cc_field = get_setting("cost_center_orders_field", "COST_CENTER")
 
     if cost_filter_mode == "item_join":
-        join_clause = (
-            "INNER JOIN dbo.ITEM i ON o.ITEM_MFGR_COLOR_PAT = i.ItemNumber"
-        )
+        item_join = "INNER JOIN dbo.ITEM i ON o.ITEM_MFGR_COLOR_PAT = i.ItemNumber"
         cost_where = "AND i.ICCTR LIKE '0%'"
     else:
-        cc_field = get_setting("cost_center_orders_field", "COST_CTR")
-        join_clause = ""
+        item_join = ""
         cost_where = f"AND o.[{cc_field}] LIKE '0%'"
 
     acct_filter = ""
@@ -77,9 +79,15 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
         SELECT
             CAST(o.[ACCOUNT#I] AS NVARCHAR(50))      AS account_number,
             CAST(o.INVOICE_DATE_YYYYMMDD AS BIGINT)  AS invoice_date_raw,
-            SUM(o.ENTENDED_PRICE_NO_FUNDS)           AS total_sales
+            SUM(o.ENTENDED_PRICE_NO_FUNDS)           AS total_sales,
+            SUM(CASE
+                WHEN o.[{cc_field}] = '041'   THEN 0
+                WHEN ph.[H@WARE]    = 'DIR'   THEN 0
+                ELSE o.ENTENDED_PRICE_NO_FUNDS
+            END)                                     AS rebate_eligible_sales
         FROM dbo._ORDERS o
-        {join_clause}
+        {item_join}
+        LEFT JOIN dbo.OPENPO_H ph ON o.[ORDER#] = ph.[H@REF#]
         WHERE
             o.[INVOICE#] > 0
             {cost_where}
@@ -197,6 +205,7 @@ def sync_sales(
                 "account_number": str(row["account_number"]).strip(),
                 "invoice_date": parsed_date,
                 "total_sales": float(row["total_sales"] or 0.0),
+                "rebate_eligible_sales": float(row.get("rebate_eligible_sales") or 0.0),
                 "last_synced_at": datetime.utcnow(),
             }
         )

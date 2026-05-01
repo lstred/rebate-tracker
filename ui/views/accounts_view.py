@@ -67,6 +67,7 @@ from services.rebate_calculator import (
     calculate_tiered_rebate,
     get_account_period,
     get_monthly_sales,
+    get_period_both_sales,
     get_period_sales,
     get_prior_year_period,
 )
@@ -106,7 +107,7 @@ class DetailLoader(QThread):
                 .all()
             )
 
-        # Use account start_date for rebate period; global range for monthly chart
+        # Use account start_date for rebate period; monthly chart uses same account period
         effective_start, effective_end = get_account_period(self.account, self._end)
         prior_start, prior_end = get_prior_year_period(effective_start, effective_end)
         current_sales = get_period_sales(
@@ -115,8 +116,10 @@ class DetailLoader(QThread):
         prior_sales = get_period_sales(
             self.account.account_number, prior_start, prior_end
         )
+        # Monthly: only current rebate year, with prior year side-by-side
         monthly = get_monthly_sales(
-            self.account.account_number, self._start, self._end
+            self.account.account_number, effective_start, effective_end,
+            include_prior_year=True,
         )
 
         rebate_result = None
@@ -519,19 +522,36 @@ class AccountDetailPanel(QWidget):
         monthly_tab = QWidget()
         mt_layout = QVBoxLayout(monthly_tab)
         mt_layout.setContentsMargins(4, 8, 4, 4)
-        monthly_tbl = QTableWidget(0, 3)
-        monthly_tbl.setHorizontalHeaderLabels(["Month", "Sales", "Cumulative"])
+        monthly_tbl = QTableWidget(0, 5)
+        monthly_tbl.setHorizontalHeaderLabels(
+            ["Month", "Current Year Sales", "Prior Year Sales", "YoY Growth", "CY Cumulative"]
+        )
         monthly_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         monthly_tbl.setAlternatingRowColors(True)
         monthly_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         monthly_tbl.verticalHeader().setVisible(False)
+        partial_note_text = ""
         for m in d.get("monthly", []):
             row = monthly_tbl.rowCount()
             monthly_tbl.insertRow(row)
-            monthly_tbl.setItem(row, 0, QTableWidgetItem(m["label"]))
+            monthly_tbl.setItem(row, 0, QTableWidgetItem(m["display_label"]))
             monthly_tbl.setItem(row, 1, QTableWidgetItem(f"${m['sales']:,.2f}"))
-            monthly_tbl.setItem(row, 2, QTableWidgetItem(f"${m['cumulative']:,.2f}"))
+            monthly_tbl.setItem(row, 2, QTableWidgetItem(f"${m['prior_sales']:,.2f}"))
+            growth_val = m["sales"] - m["prior_sales"]
+            growth_item = QTableWidgetItem(f"${growth_val:,.2f}")
+            if growth_val < 0:
+                growth_item.setForeground(QColor(C["danger"]))
+            elif growth_val > 0:
+                growth_item.setForeground(QColor(C["success"]))
+            monthly_tbl.setItem(row, 3, growth_item)
+            monthly_tbl.setItem(row, 4, QTableWidgetItem(f"${m['cumulative']:,.2f}"))
+            if m.get("partial_note") and not partial_note_text:
+                partial_note_text = m["partial_note"]
         mt_layout.addWidget(monthly_tbl)
+        if partial_note_text:
+            note_lbl = QLabel(f"* {partial_note_text}")
+            note_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px; font-style: italic;")
+            mt_layout.addWidget(note_lbl)
         tabs.addTab(monthly_tab, "Monthly Sales")
 
         # Tier breakdown tab

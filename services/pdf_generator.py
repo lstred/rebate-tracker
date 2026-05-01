@@ -184,7 +184,7 @@ class StatementBuilder:
         if self.cfg.get("show_tier_breakdown", True):
             story += self._tier_section(result, structure)
         if self.cfg.get("show_monthly_sales", True):
-            story += self._monthly_section(result)
+            story += self._monthly_section(result, structure)
         story += self._footer_section()
 
         doc.build(story)
@@ -432,10 +432,15 @@ class StatementBuilder:
         items.append(Spacer(1, 0.1 * inch))
         return items
 
-    def _monthly_section(self, result: RebateResult) -> list:
+    def _monthly_section(self, result: RebateResult, structure: RebateStructure) -> list:
         s = self._styles
+        # Detect growth tiers to decide whether to show prior year column
+        has_growth_tiers = any(
+            t.get("applies_to") == "growth" for t in structure.get_tiers()
+        )
         monthly = get_monthly_sales(
-            result.account_number, result.period_start, result.period_end
+            result.account_number, result.period_start, result.period_end,
+            include_prior_year=has_growth_tiers,
         )
         if not monthly:
             return []
@@ -445,17 +450,34 @@ class StatementBuilder:
             Paragraph("Monthly Sales Detail", s["section_header"]),
         ]
 
-        data = [["Month", "Sales", "Cumulative Sales"]]
-        for m in monthly:
-            data.append([
-                m["label"],
-                f"${m['sales']:,.2f}",
-                f"${m['cumulative']:,.2f}",
-            ])
+        partial_note = next((m["partial_note"] for m in monthly if m.get("partial_note")), "")
 
-        data.append(["Total", f"${result.current_sales:,.2f}", ""])
+        if has_growth_tiers:
+            headers = ["Month", "Current Year", "Prior Year", "YoY Growth", "CY Cumulative"]
+            col_w = [1.4 * inch, 1.3 * inch, 1.3 * inch, 1.1 * inch, 1.3 * inch]
+            data = [headers]
+            for m in monthly:
+                growth_val = m["sales"] - m["prior_sales"]
+                data.append([
+                    m["display_label"],
+                    f"${m['sales']:,.2f}",
+                    f"${m['prior_sales']:,.2f}",
+                    f"${growth_val:+,.2f}",
+                    f"${m['cumulative']:,.2f}",
+                ])
+            data.append(["Total", f"${result.current_sales:,.2f}", "", "", ""])
+        else:
+            headers = ["Month", "Sales", "Cumulative Sales"]
+            col_w = [1.8 * inch, 2.0 * inch, 2.0 * inch]
+            data = [headers]
+            for m in monthly:
+                data.append([
+                    m["display_label"],
+                    f"${m['sales']:,.2f}",
+                    f"${m['cumulative']:,.2f}",
+                ])
+            data.append(["Total", f"${result.current_sales:,.2f}", ""])
 
-        col_w = [1.8 * inch, 2.0 * inch, 2.0 * inch]
         mo_table = Table(data, colWidths=col_w, repeatRows=1)
         mo_table.setStyle(
             TableStyle(
@@ -478,6 +500,9 @@ class StatementBuilder:
             )
         )
         items.append(mo_table)
+        if partial_note:
+            items.append(Spacer(1, 0.04 * inch))
+            items.append(Paragraph(f"* {partial_note}", s["small"]))
         items.append(Spacer(1, 0.1 * inch))
         return items
 
