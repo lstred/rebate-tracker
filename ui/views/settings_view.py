@@ -84,7 +84,8 @@ class CloudRestoreWorker(QThread):
 # ---------------------------------------------------------------------------
 
 class SettingsView(QWidget):
-    theme_changed = pyqtSignal(str)   # "dark" | "light"
+    theme_changed = pyqtSignal(str)    # "dark" | "light"
+    restore_complete = pyqtSignal()    # emitted after a successful cloud or file restore
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -462,10 +463,7 @@ class SettingsView(QWidget):
         self.backup_status.setText(msg)
         self.backup_status.setStyleSheet(f"color: {color}; font-size: 11px;")
         if ok:
-            QMessageBox.information(
-                self, "Restore Complete",
-                msg + "\n\nPlease restart the application to reload all views."
-            )
+            self.restore_complete.emit()
         else:
             QMessageBox.critical(self, "Restore Failed", msg)
 
@@ -522,52 +520,124 @@ class SettingsView(QWidget):
         self.cloud_status.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     def _restore_from_cloud(self):
-        from PyQt6.QtWidgets import QMessageBox
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Restore from Cloud Backup")
-        msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setText("<b>Are you sure you want to restore from the cloud backup?</b>")
-        msg_box.setInformativeText(
-            "This will permanently replace ALL of the following local data:\n\n"
-            "  • All tracked accounts and their settings\n"
-            "  • All rebate structures and tier configurations\n"
-            "  • All rebate structure assignments\n"
-            "  • All prior-year sales overrides\n"
-            "  • All PDF templates\n"
-            "  • Application settings\n\n"
-            "Your locally cached SQL Server sales data will NOT be affected.\n"
-            "The audit trail will NOT be affected.\n\n"
-            "This action cannot be undone.  The app must be restarted after restore."
-        )
-        msg_box.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
-        )
-        msg_box.setDefaultButton(QMessageBox.StandardButton.Cancel)
-        msg_box.button(QMessageBox.StandardButton.Yes).setText("Yes, Restore from Cloud")
-        if msg_box.exec() != QMessageBox.StandardButton.Yes:
-            return
-
-        self.cloud_status.setText("Restoring from cloud…")
+        """
+        Fetch a preview of the cloud backup first, show the user what it contains,
+        then proceed with the restore only after explicit confirmation.
+        """
+        self.cloud_status.setText("Checking cloud backup…")
         self.cloud_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
-        self._restore_worker = CloudRestoreWorker(self)
-        self._restore_worker.finished.connect(self._on_cloud_restore_finished)
-        self._restore_worker.start()
+
+        class _PreviewWorker(QThread):
+            ready = pyqtSignal(bool, object)
+
+            def run(self):
+                try:
+                    from services.cloud_backup import preview_backup
+                    ok, result = preview_backup()
+                    self.ready.emit(ok, result)
+                except Exception as exc:
+                    self.ready.emit(False, str(exc))
+
+        def _on_preview(ok, result):
+            self.cloud_status.setText("")
+
+            if not ok:
+                err = str(result)
+                self.cloud_status.setText(f"✗  {err}")
+                self.cloud_status.setStyleSheet(f"color: {C['danger']}; font-size: 11px;")
+                QMessageBox.critical(self, "Cloud Backup Unavailable", err)
+                return
+
+            summary = result
+            last_updated = summary.get("last_updated", "unknown")
+            n_accounts   = summary.get("accounts", 0)
+            n_programs   = summary.get("marketing_programs", 0)
+            n_structures = summary.get("rebate_structures", 0)
+            n_assigns    = summary.get("account_assignments", 0)
+            n_overrides  = summary.get("sales_overrides", 0)
+
+            acct_line = f"  • {n_accounts} account(s)"
+            if n_accounts == 0:
+                acct_line += "  ⚠  None — restoring will leave you with no accounts!"
+
+            info = (
+                f"Last backed up:  {last_updated}\n\n"
+                f"Cloud backup contains:\n"
+                f"{acct_line}\n"
+                f"  • {n_programs} marketing program(s)\n"
+                f"  • {n_structures} rebate structure(s)\n"
+                f"  • {n_assigns} structure assignment(s)\n"
+                f"  • {n_overrides} sales override(s)\n\n"
+                f"Restoring will permanently replace ALL local accounts, structures,\n"
+                f"overrides, templates, and settings with this data.\n\n"
+                f"Your locally cached SQL Server sales data will NOT be affected.\n"
+                f"The audit trail will NOT be affected."
+            )
+
+            icon = (
+                QMessageBox.Icon.Warning
+                if n_accounts == 0
+                else QMessageBox.Icon.Question
+            )
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Restore from Cloud Backup")
+            msg_box.setIcon(icon)
+            msg_box.setText("<b>Restore from Cloud Backup</b>")
+            msg_box.setInformativeText(info)
+            msg_box.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
+            )
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            msg_box.button(QMessageBox.StandardButton.Yes).setText("Yes, Restore from Cloud")
+            if msg_box.exec() != QMessageBox.StandardButton.Yes:
+                return
+
+            self.cloud_status.setText("Restoring from cloud…")
+            self.cloud_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+            self._restore_worker = CloudRestoreWorker(self)
+            self._restore_worker.finished.connect(self._on_cloud_restore_finished)
+            self._restore_worker.start()
+
+        self._preview_worker = _PreviewWorker(self)
+        self._preview_worker.ready.connect(_on_preview)
+        self._preview_worker.start()
 
     def _on_cloud_restore_finished(self, ok: bool, msg: str):
         color = C["success"] if ok else C["danger"]
-        self.cloud_status.setText(msg)
+        prefix = "✓  " if ok else "✗  "
+        self.cloud_status.setText(prefix + msg)
         self.cloud_status.setStyleSheet(f"color: {color}; font-size: 11px;")
         if ok:
-            QMessageBox.information(
-                self, "Restore Complete",
-                msg + "\n\nPlease restart Rebate Tracker to reload all data."
-            )
+            self.restore_complete.emit()
         else:
             QMessageBox.critical(self, "Restore Failed", msg)
 
     # ------------------------------------------------------------------
     # Theme toggle
     # ------------------------------------------------------------------
+
+    def _refresh_fields(self) -> None:
+        """
+        Re-read all setting values from the database and update the UI fields.
+        Called after a cloud or file restore so fields reflect restored values
+        without requiring an app restart.
+        Note: mysql_password is excluded from cloud backups and is never overwritten.
+        """
+        self.smtp_host.setText(get_setting("smtp_host", "smtp.office365.com"))
+        self.smtp_port.setText(get_setting("smtp_port", "587"))
+        self.smtp_user.setText(get_setting("smtp_user", ""))
+        self.smtp_password.setText(get_setting("smtp_password", ""))
+        self.smtp_from_name.setText(get_setting("smtp_from_name", ""))
+        self.smtp_reply_to.setText(get_setting("smtp_reply_to", ""))
+        self.mysql_host.setText(get_setting("mysql_host", ""))
+        self.mysql_port.setText(get_setting("mysql_port", "3306"))
+        self.mysql_database.setText(get_setting("mysql_database", ""))
+        self.mysql_user.setText(get_setting("mysql_user", ""))
+        # mysql_password intentionally skipped — not included in any backup
+        self.bill_to_field.setText(get_setting("bill_to_account_field", "BACCT#"))
+        theme = get_setting("theme", "dark")
+        self._radio_dark.setChecked(theme != "light")
+        self._radio_light.setChecked(theme == "light")
 
     def _on_theme_toggled(self, btn_id: int, checked: bool):
         if not checked:

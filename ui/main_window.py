@@ -371,6 +371,7 @@ class MainWindow(QMainWindow):
         self.top_bar.date_range_changed.connect(self._on_date_range_changed)
         self.top_bar.sync_requested.connect(self._on_sync_requested)
         self.view_settings.theme_changed.connect(self._apply_theme)
+        self.view_settings.restore_complete.connect(self._on_data_restored)
 
     def _on_nav_changed(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
@@ -446,6 +447,36 @@ class MainWindow(QMainWindow):
         # Redraw dashboard chart with new palette
         if hasattr(self, "view_dashboard"):
             self.view_dashboard.refresh_theme()
+
+    def _on_data_restored(self) -> None:
+        """
+        Reload all views after a successful cloud or file backup restore.
+        Called via the SettingsView.restore_complete signal — no app restart needed.
+        """
+        # Re-apply theme in case the restored settings use a different theme
+        saved_theme = get_setting("theme", "dark")
+        self._apply_theme(saved_theme)
+
+        # Reload data views
+        start, end = self.top_bar.get_date_range()
+        if hasattr(self, "view_accounts"):
+            self.view_accounts._load_accounts()
+            # Clear any open account detail so stale data isn't shown
+            if self.view_accounts.detail_panel._account:
+                self.view_accounts.detail_panel._account = None
+                self.view_accounts.detail_panel._rebuild()
+        if hasattr(self, "view_rebate"):
+            self.view_rebate._load_structures()
+        if hasattr(self, "view_dashboard"):
+            self.view_dashboard.refresh(start, end)
+
+        # Refresh Settings field widgets to show restored values
+        if hasattr(self, "view_settings"):
+            self.view_settings._refresh_fields()
+
+        self.status_bar.showMessage(
+            "✓  Restore complete — all views reloaded with restored data.", 10000
+        )
 
 
 # ---------------------------------------------------------------------------

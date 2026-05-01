@@ -60,6 +60,7 @@ def _account_to_dict(a: Account) -> dict:
         "zip1": a.zip1,
         "zip2": a.zip2,
         "phone": a.phone,
+        "email": a.email,
         "source": a.source,
         "marketing_program_bccode": (
             a.marketing_program.bccode if a.marketing_program else None
@@ -87,6 +88,9 @@ def _structure_to_dict(s: RebateStructure) -> dict:
         "description": s.description,
         "tiers": s.get_tiers(),
         "is_template": s.is_template,
+        "include_dir": getattr(s, "include_dir", False) or False,
+        "include_041": getattr(s, "include_041", False) or False,
+        "derived_from_id": s.derived_from_id,
         "_import_id": s.id,  # used during restore to re-link assignments
     }
 
@@ -210,6 +214,7 @@ def import_backup(file_path: str) -> tuple[bool, str]:
                     zip1=ad.get("zip1"),
                     zip2=ad.get("zip2"),
                     phone=ad.get("phone"),
+                    email=ad.get("email"),
                     source=ad.get("source", "manual"),
                     marketing_program_id=mp_id,
                     start_date=start or date.today(),
@@ -218,13 +223,18 @@ def import_backup(file_path: str) -> tuple[bool, str]:
                 session.add(acct)
 
             # --- Rebate Structures ---
+            # First pass: create all structures and record old→new ID mapping.
+            # Track which structures need derived_from_id re-linked after all are created.
             old_id_to_new: dict[int, int] = {}
+            pending_derived: list[tuple[int, int]] = []  # (new_struct_id, old_derived_from_id)
             for sd in payload.get("rebate_structures", []):
                 struct = RebateStructure(
                     name=sd["name"],
                     structure_type=sd["structure_type"],
                     description=sd.get("description"),
                     is_template=sd.get("is_template", True),
+                    include_dir=bool(sd.get("include_dir", False)),
+                    include_041=bool(sd.get("include_041", False)),
                 )
                 struct.set_tiers(sd.get("tiers", []))
                 session.add(struct)
@@ -232,6 +242,17 @@ def import_backup(file_path: str) -> tuple[bool, str]:
                 old_id = sd.get("_import_id")
                 if old_id is not None:
                     old_id_to_new[old_id] = struct.id
+                old_derived = sd.get("derived_from_id")
+                if old_derived is not None:
+                    pending_derived.append((struct.id, int(old_derived)))
+
+            # Second pass: fix up derived_from_id now that all new IDs are known
+            for new_struct_id, old_derived_id in pending_derived:
+                new_derived_id = old_id_to_new.get(old_derived_id)
+                if new_derived_id:
+                    to_fix = session.get(RebateStructure, new_struct_id)
+                    if to_fix:
+                        to_fix.derived_from_id = new_derived_id
 
             # --- Account Rebate Assignments ---
             for asgn in payload.get("account_rebate_assignments", []):

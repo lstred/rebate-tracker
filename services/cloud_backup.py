@@ -176,6 +176,7 @@ def _collect_payload() -> dict:
                     "zip1": a.zip1,
                     "zip2": a.zip2,
                     "phone": a.phone,
+                    "email": a.email,
                     "source": a.source,
                     "marketing_program_bccode": (
                         a.marketing_program.bccode if a.marketing_program else None
@@ -204,6 +205,9 @@ def _collect_payload() -> dict:
                     "description": s.description,
                     "tiers": s.get_tiers(),
                     "is_template": s.is_template,
+                    "include_dir": getattr(s, "include_dir", False) or False,
+                    "include_041": getattr(s, "include_041", False) or False,
+                    "derived_from_id": s.derived_from_id,
                 }
                 for s in structures
             ],
@@ -250,17 +254,47 @@ def push_backup() -> tuple[bool, str]:
     Collect all backupable data from SQLite and push to MySQL.
     Returns (success, human_readable_message).
     Credentials are never included in the returned message.
+
+    Safety guard: if the local database has 0 accounts but the cloud backup
+    already contains accounts, the push is aborted to prevent silently
+    overwriting good data with an empty snapshot (e.g. on a fresh install).
     """
     if not is_cloud_backup_configured():
         return False, "Cloud backup not configured. Enter MySQL credentials in Settings."
 
     try:
         payload = _collect_payload()
+        local_account_count = len(payload.get("accounts", []))
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
         conn = _connect()
         try:
             _ensure_schema(conn)
+
+            # ── Safety guard ─────────────────────────────────────────────────
+            # Never overwrite a populated cloud backup with an empty local DB.
+            if local_account_count == 0:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT `snapshot_json` FROM `rebate_tracker_snapshots` "
+                        "WHERE `table_name` = 'accounts'"
+                    )
+                    row = cur.fetchone()
+                if row:
+                    try:
+                        cloud_accounts = json.loads(row[0])
+                        if len(cloud_accounts) > 0:
+                            return False, (
+                                f"Push skipped — your local database has 0 accounts, "
+                                f"but the cloud backup already contains "
+                                f"{len(cloud_accounts)} account(s). "
+                                "Use 'Restore from Cloud' to recover your data, or "
+                                "add accounts before pushing."
+                            )
+                    except Exception:
+                        pass  # JSON parse error — allow push to proceed
+            # ─────────────────────────────────────────────────────────────────
+
             with conn.cursor() as cur:
                 for table_name, rows in payload.items():
                     cur.execute(
@@ -318,6 +352,37 @@ def pull_backup() -> tuple[bool, dict | str]:
         return False, str(exc)
     except Exception as exc:
         return False, f"Cloud restore error: {type(exc).__name__}"
+
+
+def preview_backup() -> tuple[bool, dict | str]:
+    """
+    Fetch a summary of the cloud backup contents without restoring anything.
+    Returns (True, summary_dict) on success or (False, error_string) on failure.
+
+    summary_dict keys:
+      last_updated        — ISO timestamp string of the most recent push
+      accounts            — number of accounts in the cloud backup
+      marketing_programs  — number of marketing programs
+      rebate_structures   — number of rebate structures
+      account_assignments — number of structure assignments
+      sales_overrides     — number of sales overrides
+      pdf_templates       — number of PDF templates
+    """
+    ok, result = pull_backup()
+    if not ok:
+        return False, result  # result is the error string
+
+    payload = result
+    meta = payload.get("_meta", {})
+    return True, {
+        "last_updated": meta.get("last_updated", "unknown"),
+        "accounts": len(payload.get("accounts", [])),
+        "marketing_programs": len(payload.get("marketing_programs", [])),
+        "rebate_structures": len(payload.get("rebate_structures", [])),
+        "account_assignments": len(payload.get("account_rebate_assignments", [])),
+        "sales_overrides": len(payload.get("sales_overrides", [])),
+        "pdf_templates": len(payload.get("pdf_templates", [])),
+    }
 
 
 def test_connection() -> tuple[bool, str]:
