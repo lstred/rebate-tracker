@@ -65,7 +65,7 @@ rebate tracking/
 | Table | Purpose |
 |---|---|
 | `accounts` | Tracked dealers; `is_active` flag (removed = False, not deleted) |
-| `sales_cache` | Daily sales totals per account synced from SQL Server |
+| `sales_cache` | Daily sales totals per account synced from SQL Server; columns: `total_sales`, `rebate_eligible_sales`, `dir_sales`, `sales_041` |
 | `rebate_structures` | Tier configs stored as JSON in `tiers_json` |
 | `account_rebate_assignments` | Links account → rebate structure |
 | `sales_overrides` | Manual prior-year sales corrections |
@@ -114,7 +114,9 @@ rebate tracking/
 ## Rebate Calculation Logic
 - **Period:** Always starts from `account.start_date` (anniversary-based), not Jan 1.
 - **Prior year:** Same relative window shifted back exactly one year.
-- **Rebate exclusions:** `COST_CENTER='041'` (unfinished wood) and direct-ship orders (`OPENPO_H.H@WARE='DIR'`, joined via `_ORDERS.[ORDER#] = OPENPO_H.[H@REF#]`) are excluded from `rebate_eligible_sales` but still count toward tier thresholds (tracked in `total_sales`). Rate is prorated by `elig_frac = eligible / total`.
+- **Rebate exclusions:** `COST_CENTER='041'` (unfinished wood) and direct-ship orders (`OPENPO_H.H@WARE='DIR'`, joined via `_ORDERS.[ORDER#] = OPENPO_H.[H@REF#]`) are excluded from `rebate_eligible_sales` by default but still count toward tier thresholds (tracked in `total_sales`). The sync query also stores `dir_sales` and `sales_041` as separate breakdown columns so per-structure eligibility overrides can add them back.
+- **Per-structure eligibility overrides:** `RebateStructure` has `include_dir` and `include_041` boolean flags. When set, `calculate_account_rebate()` adds the corresponding breakdown column back into `current_eligible` / `prior_eligible` before calculating rebates. Managed via checkboxes in `StructureDialog`.
+- **Customer-level customization:** An account can have its own private `RebateStructure` with `is_template=False`. The account detail panel shows **Customize** (create a copy), **Edit Custom Rebate** (edit existing copy), and **Reset to Template** (delete copy, revert to `derived_from_id` template). A **Custom** amber badge appears in the header when a custom structure is active.
 - **Tier types (per tier, not per structure):**
   - `sales` — rate applied to total current sales
   - `growth` — rate applied to `max(0, current_sales - prior_year_sales)`
@@ -166,3 +168,5 @@ Viewable in the **Audit Log** tab (sidebar nav index 4).
 - **OPENPO_H fan-out inflates sales / subquery-in-aggregate error:** `LEFT JOIN dbo.OPENPO_H` fans out when an ORDER# has multiple rows, inflating SUM. `EXISTS` inside `SUM(CASE WHEN ...)` is also rejected by SQL Server (error 130). Fix: use a CTE `WITH dir_orders AS (SELECT DISTINCT [H@REF#] FROM dbo.OPENPO_H WHERE [H@WARE] = 'DIR')` then `LEFT JOIN dir_orders d ON o.[ORDER#] = d.[H@REF#]` and `WHEN d.[H@REF#] IS NOT NULL THEN 0`. DISTINCT guarantees at most one row per ORDER# so no fan-out, and no subquery inside the aggregate.
 - **Invoice# = 0 and NULL exclusion:** Use `ISNULL(o.[INVOICE#], 0) <> 0` rather than `> 0` to correctly exclude both NULL and zero invoice records.
 - **Cost center '1%' explicit exclusion:** `AND o.[{cc_field}] NOT LIKE '1%'` is always added to WHERE regardless of filter mode. In `orders_field` mode this pairs with `LIKE '0%'`; in `item_join` mode it guards the _ORDERS table directly since the item join only filters `dbo.ITEM.ICCTR`.
+- **dir_sales / sales_041 breakdown columns:** The sync CTE query adds two extra `SUM(CASE WHEN ...)` columns — `dir_sales` (rows where `d.[H@REF#] IS NOT NULL`) and `sales_041` (rows where cost center = '041'). Legacy cache rows have these as 0 until a re-sync. `get_period_sales_breakdown()` in `rebate_calculator.py` returns a dict `{total, eligible, dir_sales, sales_041}` and is called by `calculate_account_rebate()` to apply `include_dir`/`include_041` flags.
+- **Customer-level rebate customization:** `RebateStructure.is_template=False` marks a structure as a per-account copy. `derived_from_id` stores the originating template's ID so **Reset to Template** can reassign. When editing, always check `not custom.is_template` before modifying to avoid accidentally editing templates. The `StructureDialog` proxy pattern (class `_Proxy`) is reused from `_edit_structure()` for the customize flow in `accounts_view.py`.
