@@ -431,6 +431,7 @@ def init_db() -> None:
             row.value = "BACCT#"
 
     # Migration: add email column to accounts
+    from sqlalchemy import text
     try:
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE accounts ADD COLUMN email VARCHAR(255)"))
@@ -439,7 +440,6 @@ def init_db() -> None:
         pass  # Column already exists — no-op
 
     # Migration: add rebate_eligible_sales column to sales_cache if it doesn't exist
-    from sqlalchemy import text
     try:
         with engine.connect() as conn:
             conn.execute(text(

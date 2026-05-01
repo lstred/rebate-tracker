@@ -713,33 +713,52 @@ class PdfTemplateView(QWidget):
         self._init_email_group_filter()
         self._load_email_table()
 
+    def _on_template_selected(self, current, _):
+        if not current:
+            return
+        tmpl_id = current.data(Qt.ItemDataRole.UserRole)
+        with get_session() as session:
+            tmpl = session.query(PdfTemplate).filter_by(id=tmpl_id).first()
+            if not tmpl:
+                return
+            import json as _json
+            self._active_config = _json.loads(tmpl.template_json)
+            # Clear old editor
+            while self._editor_layout.count():
+                item = self._editor_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._current_editor = TemplateEditorPanel(tmpl)
+            self._editor_layout.addWidget(self._current_editor)
+            self.btn_save.setEnabled(True)
+
     def _init_email_group_filter(self):
         self.email_group_filter.blockSignals(True)
         self.email_group_filter.clear()
         self.email_group_filter.addItem("All Accounts", None)
         with get_session() as session:
-            from db.local_db import Account
-            groups = (
-                session.query(Account.program_bc_code)
-                .filter(Account.is_active.is_(True), Account.program_bc_code.isnot(None))
-                .distinct()
-                .order_by(Account.program_bc_code)
+            programs = (
+                session.query(MarketingProgram)
+                .order_by(MarketingProgram.name)
                 .all()
             )
-        for (grp,) in groups:
-            if grp:
-                self.email_group_filter.addItem(grp, grp)
+            for p in programs:
+                self.email_group_filter.addItem(
+                    f"{p.name or p.bccode} ({p.bccode})", p.bccode
+                )
         self.email_group_filter.blockSignals(False)
 
     def _load_email_table(self):
         import os
         self.email_table.setRowCount(0)
-        group_filter = self.email_group_filter.currentData()
+        group_filter = self.email_group_filter.currentData()  # bccode or None
         with get_session() as session:
-            from db.local_db import Account
             q = session.query(Account).filter(Account.is_active.is_(True))
             if group_filter:
-                q = q.filter(Account.program_bc_code == group_filter)
+                q = q.join(
+                    MarketingProgram,
+                    Account.marketing_program_id == MarketingProgram.id
+                ).filter(MarketingProgram.bccode == group_filter)
             accounts = q.order_by(Account.account_number).all()
             account_data = [
                 (a.account_number, a.account_name or a.account_number, getattr(a, "email", "") or "")
@@ -906,23 +925,6 @@ class PdfTemplateView(QWidget):
                 import json
                 return json.loads(t.template_json)
         return {}
-        if not current:
-            return
-        tmpl_id = current.data(Qt.ItemDataRole.UserRole)
-        with get_session() as session:
-            tmpl = session.query(PdfTemplate).filter_by(id=tmpl_id).first()
-            if not tmpl:
-                return
-            import json as _json
-            self._active_config = _json.loads(tmpl.template_json)
-            # Clear old editor
-            while self._editor_layout.count():
-                item = self._editor_layout.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
-            self._current_editor = TemplateEditorPanel(tmpl)
-            self._editor_layout.addWidget(self._current_editor)
-            self.btn_save.setEnabled(True)
 
     def _save_template(self):
         if self._current_editor:

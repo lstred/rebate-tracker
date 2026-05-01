@@ -42,10 +42,11 @@ rebate tracking/
 │   ├── rebate_calculator.py       # Core calculation engine (no UI/DB imports)
 │   ├── pdf_generator.py           # ReportLab PDF statement builder
 │   ├── cloud_backup.py            # MySQL live backup: CloudBackupWorker (QThread singleton) + push/pull/restore
+│   ├── email_sender.py            # SMTP email service: get_smtp_settings, smtp_configured, send_statement_email
 │   └── backup.py                  # JSON backup/restore (local file)
 ├── ui/
 │   ├── main_window.py             # App shell: sidebar + TopBar + QStackedWidget
-│   ├── theme.py                   # Colour constants (C dict)
+│   ├── theme.py                   # Colour constants (C dict) + apply_theme() + _DARK/_LIGHT palettes
 │   └── views/
 │       ├── dashboard_view.py      # KPI cards + bar chart (DashboardLoader QThread)
 │       ├── accounts_view.py       # Account list + detail panel + overrides
@@ -64,7 +65,7 @@ rebate tracking/
 ### Key Tables
 | Table | Purpose |
 |---|---|
-| `accounts` | Tracked dealers; `is_active` flag (removed = False, not deleted) |
+| `accounts` | Tracked dealers; `is_active` flag (removed = False, not deleted); `email VARCHAR(255)` column added |
 | `sales_cache` | Daily sales totals per account synced from SQL Server; columns: `total_sales`, `rebate_eligible_sales`, `dir_sales`, `sales_041` |
 | `rebate_structures` | Tier configs stored as JSON in `tiers_json` |
 | `account_rebate_assignments` | Links account → rebate structure |
@@ -109,6 +110,17 @@ rebate tracking/
 | `mysql_user` | `nrfselec_wp404` | Cloud DB user |
 | `mysql_password` | `""` | Cloud DB password (user enters in Settings UI; never hardcoded) |
 
+### App Settings for SMTP Email
+| Setting key | Default | What it controls |
+|---|---|---|
+| `smtp_host` | `smtp.office365.com` | SMTP server hostname |
+| `smtp_port` | `587` | SMTP port (STARTTLS) |
+| `smtp_user` | `""` | Sender email address / login |
+| `smtp_password` | `""` | Password or App Password (never hardcoded) |
+| `smtp_from_name` | `""` | Display name in From header |
+| `theme` | `dark` | Active UI theme (`dark` or `light`) |
+| `last_export_dir` | `""` | Last PDF export folder (shared between Generate and Email sections) |
+
 ---
 
 ## Rebate Calculation Logic
@@ -125,6 +137,37 @@ rebate tracking/
   - `dollar_one` — rate applies to ALL sales from dollar one when threshold is crossed (overrides lower tiers)
   - `forward_only` — rate applies only to incremental sales above the threshold (stacks)
 - `structure_type` field in DB is kept for backward compat but new structures are always `"tiered"` with `applies_to` per tier.
+
+---
+
+## Theme System
+- **Palettes:** `_DARK` and `_LIGHT` dicts defined in `ui/theme.py`. Global mutable `C` dict starts as a copy of `_DARK`.
+- **`apply_theme(theme_name)`:** Clears and updates `C` in-place, rebuilds `STYLESHEET` via `_build_stylesheet()`, returns the new QSS string. Caller does `QApplication.instance().setStyleSheet(apply_theme(...))`.
+- **Startup:** `main_window.py` reads `get_setting("theme", "dark")` and calls `_apply_theme()` if not dark (dark is already applied at import time).
+- **Persistence:** `settings_view.py` writes `theme` setting and emits `theme_changed` signal; `MainWindow._apply_theme()` handles the signal.
+- **Light palette:** bg=`#F0F2F5`, surface=`#FFFFFF`, accent=`#2563EB`, text=`#1F2328`, sidebar=`#FFFFFF`, sidebar_sel=`#DBEAFE`.
+- **Caution:** Any code that f-strings `C` values at class/module level (not at draw time) will not update on theme switch. Always reference `C["key"]` at draw/paint time.
+
+---
+
+## Email (SMTP) Service
+- **File:** `services/email_sender.py`
+- **`get_smtp_settings() -> dict`:** Reads smtp_host/port/user/password/from_name from `app_settings`.
+- **`smtp_configured() -> bool`:** True only if host + user + password are all set.
+- **`send_statement_email(to_email, to_name, account_number, pdf_path, subject=None, body_html=None) -> tuple[bool, str]`:** STARTTLS on port 587, MIMEMultipart with HTML body + PDF attachment. Catches `SMTPAuthenticationError`, `SMTPException`, `OSError` separately.
+- **MFA / App Passwords:** If the organisation uses MFA, user must generate an App Password in their Microsoft account security settings and enter it in Settings → Email.
+- **Test connection:** Settings → Email → *Send Test Email* runs an async STARTTLS login check in a `QThread` and reports success or error without sending an actual email.
+
+---
+
+## PDF Templates — Email Statements section
+- Located at the bottom of the **PDF Templates** view below the batch export section.
+- Shows a `QTableWidget` with columns: Account #, Name, Email, PDF File, Preview, Send.
+- **Preview** opens the PDF with the system default viewer (`QDesktopServices.openUrl`); disabled if the file doesn't exist yet.
+- **Send** generates the PDF (calls `generate_statement`) then emails it — all in `EmailSendWorker(QThread)`. Row status updates on completion.
+- Group filter combo lets you scope the list to one marketing program.
+- PDF folder is shared with the Generate section; persisted in `last_export_dir` setting.
+- If `smtp_configured()` is False, the Send button shows a warning dialog directing user to Settings.
 
 ---
 
@@ -170,3 +213,9 @@ Viewable in the **Audit Log** tab (sidebar nav index 4).
 - **Cost center '1%' explicit exclusion:** `AND o.[{cc_field}] NOT LIKE '1%'` is always added to WHERE regardless of filter mode. In `orders_field` mode this pairs with `LIKE '0%'`; in `item_join` mode it guards the _ORDERS table directly since the item join only filters `dbo.ITEM.ICCTR`.
 - **dir_sales / sales_041 breakdown columns:** The sync CTE query adds two extra `SUM(CASE WHEN ...)` columns — `dir_sales` (rows where `d.[H@REF#] IS NOT NULL`) and `sales_041` (rows where cost center = '041'). Legacy cache rows have these as 0 until a re-sync. `get_period_sales_breakdown()` in `rebate_calculator.py` returns a dict `{total, eligible, dir_sales, sales_041}` and is called by `calculate_account_rebate()` to apply `include_dir`/`include_041` flags.
 - **Customer-level rebate customization:** `RebateStructure.is_template=False` marks a structure as a per-account copy. `derived_from_id` stores the originating template's ID so **Reset to Template** can reassign. When editing, always check `not custom.is_template` before modifying to avoid accidentally editing templates. The `StructureDialog` proxy pattern (class `_Proxy`) is reused from `_edit_structure()` for the customize flow in `accounts_view.py`.
+- **Account.email field:** `accounts` table has an `email VARCHAR(255)` column added via `ALTER TABLE` migration in `init_db()`. Shown in the account detail panel header with a `✉` edit button. Used by the Email Statements section in PDF Templates.
+- **Account.account_name vs Account.name:** The ORM field is `account_name` (not `name`). Always use `a.account_name` when referencing the dealer name from the `Account` model.
+- **Backup Now status:** Settings → Cloud Backup → *Backup Now* now runs a private `_BackupNowWorker(QThread)` that calls `push_backup()` directly and emits a `finished_now` signal, so the status label shows a real ✓/✗ result instead of "queued in background".
+- **theme.py stray CSS outside f-string:** When editing `_build_stylesheet()`, ensure all QSS stays inside the triple-quoted f-string. Anything placed after the closing `"""` becomes bare Python and causes `SyntaxError: invalid character` on Unicode box-drawing chars in CSS comments.
+- **`_active_config` in pdf_template_view:** `_on_template_selected` stores the parsed template JSON as `self._active_config`. `_current_config()` reads this first, then falls back to the default template. `template_json` is the correct column name (not `config_json`).
+- **`_choose_export_dir` syncs both labels:** When the user picks an export folder it sets both `self._export_dir`, `self._last_export_dir`, `self.lbl_export_dir`, and `self.lbl_email_dir`, and persists to `last_export_dir` setting.
