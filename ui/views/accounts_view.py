@@ -374,8 +374,12 @@ class GalleryLoader(QThread):
                     tiers = structures[asn.rebate_structure_id].get_tiers()
 
                 elapsed = max(1, (today - p_start).days)
-                total   = max(1, (p_end - p_start).days)
-                projected = current * total / elapsed
+                try:
+                    fy_end = p_start.replace(year=p_start.year + 1)
+                except ValueError:
+                    fy_end = p_start.replace(year=p_start.year + 1, day=28)
+                full_days = max(1, (fy_end - p_start).days)
+                projected = current * full_days / elapsed
 
                 result[acct.account_number] = {
                     "tiers": tiers,
@@ -434,11 +438,15 @@ class DetailLoader(QThread):
             self.account.account_number, prior_start, prior_end
         )
 
-        # Straight-line projected year-end total
+        # Straight-line projection to the end of the FULL rebate year (not the picker end)
         today = date.today()
         elapsed_days = max(1, (today - effective_start).days)
-        total_days   = max(1, (effective_end - effective_start).days)
-        projected_sales = current_sales * total_days / elapsed_days
+        try:
+            full_year_end = effective_start.replace(year=effective_start.year + 1)
+        except ValueError:  # Feb 29 in non-leap year
+            full_year_end = effective_start.replace(year=effective_start.year + 1, day=28)
+        full_year_days = max(1, (full_year_end - effective_start).days)
+        projected_sales = current_sales * full_year_days / elapsed_days
 
         # Monthly: only current rebate year, with prior year side-by-side
         monthly = get_monthly_sales(

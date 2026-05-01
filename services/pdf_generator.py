@@ -110,8 +110,8 @@ class StatementBuilder:
                 fontName="Helvetica-Bold",
                 fontSize=10,
                 textColor=p,
-                spaceBefore=12,
-                spaceAfter=4,
+                spaceBefore=6,
+                spaceAfter=3,
             ),
             "body": ParagraphStyle(
                 "body",
@@ -171,10 +171,10 @@ class StatementBuilder:
         doc = SimpleDocTemplate(
             buf,
             pagesize=self.paper,
-            leftMargin=0.65 * inch,
-            rightMargin=0.65 * inch,
-            topMargin=0.65 * inch,
-            bottomMargin=0.65 * inch,
+            leftMargin=0.55 * inch,
+            rightMargin=0.55 * inch,
+            topMargin=0.5 * inch,
+            bottomMargin=0.5 * inch,
         )
 
         story = []
@@ -242,9 +242,9 @@ class StatementBuilder:
             )
         )
         items.append(header_table)
-        items.append(Spacer(1, 0.15 * inch))
-        items.append(HRFlowable(width="100%", thickness=2, color=self.primary))
         items.append(Spacer(1, 0.1 * inch))
+        items.append(HRFlowable(width="100%", thickness=2, color=self.primary))
+        items.append(Spacer(1, 0.08 * inch))
         return items
 
     def _dealer_info_section(self, account: Account, result: RebateResult) -> list:
@@ -259,10 +259,9 @@ class StatementBuilder:
             city_line += "  " + city_line_parts[2]
 
         phone = account.phone or ""
-        period = (
-            f"{result.period_start.strftime('%m/%d/%Y')} — "
-            f"{result.period_end.strftime('%m/%d/%Y')}"
-        )
+        # Statement Date = just the period end date (e.g. 5/1/26)
+        _d = result.period_end
+        stmt_date = f"{_d.month}/{_d.day}/{str(_d.year)[2:]}"
 
         left = [
             Paragraph("<b>Bill To:</b>", s["section_header"]),
@@ -277,14 +276,14 @@ class StatementBuilder:
         ]
 
         right = [
-            Paragraph("<b>Statement Period:</b>", s["section_header"]),
-            Paragraph(period, s["body"]),
+            Paragraph("<b>Statement Date:</b>", s["section_header"]),
+            Paragraph(stmt_date, s["body"]),
             Spacer(1, 4),
-            Paragraph(f"<b>Rebate Program:</b>", s["section_header"]),
+            Paragraph("<b>Rebate Program:</b>", s["section_header"]),
             Paragraph(result.structure_name, s["body"]),
         ]
 
-        info_table = Table([[left, right]], colWidths=[3.5 * inch, 3.5 * inch])
+        info_table = Table([[left, right]], colWidths=[3.7 * inch, 3.3 * inch])
         info_table.setStyle(
             TableStyle(
                 [
@@ -293,7 +292,7 @@ class StatementBuilder:
                 ]
             )
         )
-        return [info_table, Spacer(1, 0.15 * inch)]
+        return [info_table, Spacer(1, 0.10 * inch)]
 
     def _kpi_section(self, result: RebateResult) -> list:
         """Large KPI summary boxes."""
@@ -340,8 +339,8 @@ class StatementBuilder:
                     )),
                     ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 10),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
                     ("LEFTPADDING", (0, 0), (-1, -1), 8),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                     ("LINEAFTER", (0, 0), (2, 0), 1, colors.white),
@@ -349,12 +348,12 @@ class StatementBuilder:
             )
         )
 
-        items = [kpi_table, Spacer(1, 0.08 * inch)]
+        items = [kpi_table, Spacer(1, 0.06 * inch)]
         if result.override_applied and result.override_note:
             items.append(
                 Paragraph(f"* {result.override_note}", self._styles["small"])
             )
-        items.append(Spacer(1, 0.1 * inch))
+        items.append(Spacer(1, 0.06 * inch))
         return items
 
     def _tier_section(self, result: RebateResult, structure: RebateStructure) -> list:
@@ -380,8 +379,10 @@ class StatementBuilder:
             threshold = float(td.get("threshold", 0))
             rate = float(td.get("rate", 0))
             mode = td.get("mode", "dollar_one")
+            applies_to = td.get("applies_to", "sales")
+            is_freight = applies_to == "freight"
             reached = eval_sales >= threshold
-            status = "✓ Reached" if reached else "Not Reached"
+            status = "\u2713 Reached" if reached else "Not Reached"
 
             # Find contribution from tier_results
             contribution = 0.0
@@ -389,20 +390,26 @@ class StatementBuilder:
                 if tr.tier_number == tier_num:
                     contribution = tr.rebate_contribution
 
-            mode_label = "All Sales (Dollar One)" if mode == "dollar_one" else "Incremental Only"
+            if is_freight:
+                type_label = "Freight"
+                earned_label = f"{rate * 100:.0f}% Freight" if reached else "\u2014"
+            else:
+                type_label = "All Sales (Dollar One)" if mode == "dollar_one" else "Incremental Only"
+                earned_label = f"${contribution:,.2f}" if reached else "\u2014"
+
             data.append([
                 f"Tier {tier_num}",
                 f"${threshold:,.0f}",
                 f"{rate * 100:.2f}%",
-                mode_label,
+                type_label,
                 status,
-                f"${contribution:,.2f}" if reached else "—",
+                earned_label,
             ])
 
         # Total row
         data.append(["", "", "", "", "Total Rebate", f"${result.rebate_amount:,.2f}"])
 
-        col_w = [0.55 * inch, 1.3 * inch, 0.7 * inch, 1.55 * inch, 1.0 * inch, 1.0 * inch]
+        col_w = [0.55 * inch, 1.2 * inch, 0.6 * inch, 1.3 * inch, 1.0 * inch, 1.1 * inch]
         tier_table = Table(data, colWidths=col_w, repeatRows=1)
         tier_table.setStyle(
             TableStyle(
@@ -421,15 +428,15 @@ class StatementBuilder:
                     ("FONTNAME", (4, -1), (5, -1), "Helvetica-Bold"),
                     ("TEXTCOLOR", (5, -1), (5, -1), self.primary),
                     # Padding
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                     # Grid
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
                 ]
             )
         )
         items.append(tier_table)
-        items.append(Spacer(1, 0.1 * inch))
+        items.append(Spacer(1, 0.07 * inch))
         return items
 
     def _monthly_section(self, result: RebateResult, structure: RebateStructure) -> list:
@@ -450,11 +457,17 @@ class StatementBuilder:
             Paragraph("Monthly Sales Detail", s["section_header"]),
         ]
 
-        partial_note = next((m["partial_note"] for m in monthly if m.get("partial_note")), "")
+        # Partial note: month/day only, no year
+        partial_note_raw = next((m["partial_note"] for m in monthly if m.get("partial_note")), "")
+        partial_note = ""
+        if partial_note_raw:
+            # Replace 4-digit years in the note with nothing (keep MM/DD)
+            import re
+            partial_note = re.sub(r"/(\d{4})", "", partial_note_raw)
 
         if has_growth_tiers:
             headers = ["Month", "Current Year", "Prior Year", "YoY Growth", "CY Cumulative"]
-            col_w = [1.4 * inch, 1.3 * inch, 1.3 * inch, 1.1 * inch, 1.3 * inch]
+            col_w = [1.35 * inch, 1.25 * inch, 1.25 * inch, 1.1 * inch, 1.3 * inch]
             data = [headers]
             for m in monthly:
                 growth_val = m["sales"] - m["prior_sales"]
@@ -491,8 +504,8 @@ class StatementBuilder:
                     ("ALIGN", (0, 0), (0, -1), "LEFT"),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, self.secondary]),
                     ("BACKGROUND", (0, -1), (-1, -1), self.secondary),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                     ("LEFTPADDING", (0, 0), (-1, -1), 6),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
@@ -501,9 +514,9 @@ class StatementBuilder:
         )
         items.append(mo_table)
         if partial_note:
-            items.append(Spacer(1, 0.04 * inch))
+            items.append(Spacer(1, 0.03 * inch))
             items.append(Paragraph(f"* {partial_note}", s["small"]))
-        items.append(Spacer(1, 0.1 * inch))
+        items.append(Spacer(1, 0.07 * inch))
         return items
 
     def _footer_section(self) -> list:
@@ -511,14 +524,10 @@ class StatementBuilder:
             "footer_text", "Thank you for your continued business."
         )
         return [
-            Spacer(1, 0.2 * inch),
+            Spacer(1, 0.1 * inch),
             HRFlowable(width="100%", thickness=1, color=self.secondary),
-            Spacer(1, 0.05 * inch),
+            Spacer(1, 0.04 * inch),
             Paragraph(footer_text, self._styles["footer"]),
-            Paragraph(
-                f"Generated {date.today().strftime('%B %d, %Y')}",
-                self._styles["footer"],
-            ),
         ]
 
 
