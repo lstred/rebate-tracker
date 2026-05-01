@@ -1129,25 +1129,57 @@ class AccountDetailPanel(QWidget):
     def _edit_email(self):
         if not self._account:
             return
-        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QVBoxLayout
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QVBoxLayout, QLabel
+        import re
+
         dlg = QDialog(self)
         dlg.setWindowTitle("Set Email Address")
-        dlg.setMinimumWidth(380)
-        dlg.setStyleSheet(f"background-color: {C['surface']}; color: {C['text']};")
+        dlg.setMinimumWidth(400)
         layout = QVBoxLayout(dlg)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        title_lbl = QLabel("Dealer Email Address")
+        title_lbl.setFont(__import__("PyQt6.QtGui", fromlist=["QFont"]).QFont("Segoe UI", 11, __import__("PyQt6.QtGui", fromlist=["QFont"]).QFont.Weight.Bold))
+        layout.addWidget(title_lbl)
+
+        hint_lbl = QLabel(f"Set the contact email for <b>{self._account.account_name or self._account.account_number}</b>. Used for emailing PDF statements.")
+        hint_lbl.setProperty("class", "muted")
+        hint_lbl.setWordWrap(True)
+        layout.addWidget(hint_lbl)
+
         form = QFormLayout()
+        form.setSpacing(8)
         email_input = QLineEdit(getattr(self._account, "email", "") or "")
         email_input.setPlaceholderText("dealer@example.com")
-        form.addRow("Email Address:", email_input)
+        email_input.setMinimumHeight(32)
+        form.addRow("Email:", email_input)
         layout.addLayout(form)
+
+        err_lbl = QLabel("")
+        err_lbl.setStyleSheet(f"color: {C['danger']}; font-size: 11px;")
+        err_lbl.setVisible(False)
+        layout.addWidget(err_lbl)
+
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        btns.accepted.connect(dlg.accept)
+        ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setProperty("class", "primary")
+
+        def _try_accept():
+            text = email_input.text().strip()
+            if text and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", text):
+                err_lbl.setText("Please enter a valid email address.")
+                err_lbl.setVisible(True)
+                return
+            dlg.accept()
+
+        ok_btn.clicked.disconnect()
+        ok_btn.clicked.connect(_try_accept)
         btns.rejected.connect(dlg.reject)
         layout.addWidget(btns)
+
         if dlg.exec():
             new_email = email_input.text().strip()
             old_email = getattr(self._account, "email", "") or ""
@@ -1167,7 +1199,7 @@ class AccountDetailPanel(QWidget):
             )
             self._rebuild()
 
-
+    def _add_override(self):
         if not self._account:
             return
         dlg = OverrideDialog(self._account.account_number, parent=self)
