@@ -17,6 +17,7 @@ from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -34,13 +35,14 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from db.local_db import PdfTemplate, get_session
-from services.pdf_generator import batch_generate
+from db.local_db import Account, AccountRebateAssignment, MarketingProgram, PdfTemplate, RebateStructure, get_session
+from services.pdf_generator import batch_generate, generate_statement
 from ui.theme import C
 
 
@@ -110,6 +112,80 @@ class BatchExportWorker(QThread):
             self.finished.emit(True, f"Export complete.", len(written))
         except Exception as exc:
             self.finished.emit(False, str(exc), 0)
+
+
+# ---------------------------------------------------------------------------
+# Single / group export worker
+# ---------------------------------------------------------------------------
+
+class TargetedExportWorker(QThread):
+    """Export PDFs for a specific account number or marketing program BCCODE."""
+
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(bool, str, int)
+
+    def __init__(
+        self,
+        output_dir: str,
+        period_end,
+        template_config: dict,
+        account_numbers: list[str],   # empty = batch all
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.output_dir = output_dir
+        self.period_end = period_end
+        self.template_config = template_config
+        self.account_numbers = account_numbers
+
+    def run(self):
+        import os
+        from pathlib import Path
+        from db.local_db import Account, AccountRebateAssignment, RebateStructure, get_session
+        from services.rebate_calculator import get_account_period
+        from services.pdf_generator import generate_statement
+
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        written = []
+
+        with get_session() as session:
+            accounts = (
+                session.query(Account)
+                .filter(
+                    Account.is_active == True,
+                    Account.account_number.in_(self.account_numbers),
+                )
+                .all()
+            )
+            assignments = {
+                a.account_number: a
+                for a in session.query(AccountRebateAssignment).all()
+            }
+            structures = {s.id: s for s in session.query(RebateStructure).all()}
+
+        total = len(accounts)
+        for i, acct in enumerate(accounts):
+            if total:
+                self.progress.emit(int(i / total * 100), f"Generating {acct.account_number}…")
+
+            assignment = assignments.get(acct.account_number)
+            if not assignment or assignment.rebate_structure_id not in structures:
+                continue
+
+            structure = structures[assignment.rebate_structure_id]
+            period_start, period_end = get_account_period(acct, self.period_end)
+            out_path = os.path.join(self.output_dir, f"{acct.account_number}.pdf")
+            try:
+                generate_statement(
+                    acct, period_start, period_end,
+                    self.template_config, structure,
+                    output_path=out_path,
+                )
+                written.append(out_path)
+            except Exception as exc:
+                print(f"[PDF] Error generating {acct.account_number}: {exc}")
+
+        self.finished.emit(True, "Export complete.", len(written))
 
 
 # ---------------------------------------------------------------------------
@@ -341,33 +417,93 @@ class PdfTemplateView(QWidget):
         # ── Export section ────────────────────────────────────────────
         export_frame = QFrame()
         export_frame.setProperty("class", "card")
-        export_layout = QHBoxLayout(export_frame)
-        export_layout.setContentsMargins(16, 12, 16, 12)
-        export_layout.setSpacing(12)
+        export_outer = QVBoxLayout(export_frame)
+        export_outer.setContentsMargins(16, 12, 16, 12)
+        export_outer.setSpacing(10)
 
-        export_lbl = QLabel(
-            "<b>Batch Export</b>  — Generate a PDF for every active account "
-            "using the current date range and selected template."
-        )
-        export_lbl.setTextFormat(Qt.TextFormat.RichText)
-        export_lbl.setWordWrap(True)
-        export_layout.addWidget(export_lbl, stretch=1)
+        export_heading = QLabel("Generate PDF Statements")
+        export_heading.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        export_outer.addWidget(export_heading)
 
+        # Folder selector (shared across modes)
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(8)
+        folder_lbl_prefix = QLabel("Output folder:")
+        folder_lbl_prefix.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        folder_row.addWidget(folder_lbl_prefix)
         self.lbl_export_dir = QLabel("No folder selected")
         self.lbl_export_dir.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
-        export_layout.addWidget(self.lbl_export_dir)
-
+        folder_row.addWidget(self.lbl_export_dir, stretch=1)
         btn_dir = QPushButton("Choose Folder")
         btn_dir.clicked.connect(self._choose_export_dir)
-        export_layout.addWidget(btn_dir)
+        folder_row.addWidget(btn_dir)
+        export_outer.addLayout(folder_row)
 
+        # Three export buttons in a row
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        # Single account
+        single_col = QVBoxLayout()
+        single_col.setSpacing(4)
+        single_label = QLabel("Single Account")
+        single_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        single_col.addWidget(single_label)
+        self.single_acct_combo = QComboBox()
+        self.single_acct_combo.setMinimumWidth(200)
+        single_col.addWidget(self.single_acct_combo)
+        self.btn_export_single = QPushButton("⬇  Generate Statement")
+        self.btn_export_single.setProperty("class", "primary")
+        self.btn_export_single.setEnabled(False)
+        self.btn_export_single.clicked.connect(self._export_single)
+        single_col.addWidget(self.btn_export_single)
+        btn_row.addLayout(single_col)
+
+        # Vertical separator
+        vsep = QFrame()
+        vsep.setFrameShape(QFrame.Shape.VLine)
+        vsep.setStyleSheet(f"color: {C['border']};")
+        btn_row.addWidget(vsep)
+
+        # Marketing program group
+        group_col = QVBoxLayout()
+        group_col.setSpacing(4)
+        group_label = QLabel("By Marketing Program")
+        group_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        group_col.addWidget(group_label)
+        self.group_combo = QComboBox()
+        self.group_combo.setMinimumWidth(200)
+        group_col.addWidget(self.group_combo)
+        self.btn_export_group = QPushButton("⬇  Generate for Group")
+        self.btn_export_group.setProperty("class", "primary")
+        self.btn_export_group.setEnabled(False)
+        self.btn_export_group.clicked.connect(self._export_group)
+        group_col.addWidget(self.btn_export_group)
+        btn_row.addLayout(group_col)
+
+        vsep2 = QFrame()
+        vsep2.setFrameShape(QFrame.Shape.VLine)
+        vsep2.setStyleSheet(f"color: {C['border']};")
+        btn_row.addWidget(vsep2)
+
+        # Batch all
+        batch_col = QVBoxLayout()
+        batch_col.setSpacing(4)
+        batch_label = QLabel("All Active Accounts")
+        batch_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        batch_col.addWidget(batch_label)
+        batch_spacer = QLabel("")   # align vertically with combos
+        batch_spacer.setFixedHeight(self.single_acct_combo.sizeHint().height())
+        batch_col.addWidget(batch_spacer)
         self.btn_export = QPushButton("⬇  Export All PDFs")
         self.btn_export.setProperty("class", "success")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_all)
-        export_layout.addWidget(self.btn_export)
+        batch_col.addWidget(self.btn_export)
+        btn_row.addLayout(batch_col)
 
-        root.addWidget(export_frame)
+        btn_row.addStretch()
+        export_outer.addLayout(btn_row)
 
         # Progress bar (hidden when idle)
         self.export_progress = QProgressBar()
@@ -377,10 +513,14 @@ class PdfTemplateView(QWidget):
         prog_row = QHBoxLayout()
         prog_row.addWidget(self.export_progress)
         prog_row.addWidget(self.export_status)
-        root.addLayout(prog_row)
+        export_outer.addLayout(prog_row)
+
+        root.addWidget(export_frame)
 
         self._export_dir: str = ""
+        self._export_worker: Optional[QThread] = None
         self._load_templates()
+        self._load_export_combos()
 
     def _load_templates(self):
         with get_session() as session:
@@ -461,6 +601,84 @@ class PdfTemplateView(QWidget):
             self._export_dir = folder
             self.lbl_export_dir.setText(folder)
             self.btn_export.setEnabled(True)
+            self.btn_export_single.setEnabled(True)
+            self.btn_export_group.setEnabled(True)
+
+    def _load_export_combos(self):
+        """Populate the single-account and marketing-program combo boxes."""
+        with get_session() as session:
+            accounts = (
+                session.query(Account)
+                .filter_by(is_active=True)
+                .order_by(Account.account_number)
+                .all()
+            )
+            programs = session.query(MarketingProgram).order_by(MarketingProgram.name).all()
+
+        self.single_acct_combo.clear()
+        for a in accounts:
+            label = f"{a.account_number}  —  {a.account_name}" if a.account_name else a.account_number
+            self.single_acct_combo.addItem(label, userData=a.account_number)
+
+        self.group_combo.clear()
+        for p in programs:
+            self.group_combo.addItem(f"{p.name or p.bccode} ({p.bccode})", userData=p.bccode)
+        if not programs:
+            self.group_combo.addItem("(no marketing programs)", userData=None)
+
+    def _export_single(self):
+        if not self._export_dir or not self._current_editor:
+            QMessageBox.warning(self, "Not Ready", "Choose an output folder and select a template first.")
+            return
+        acct_no = self.single_acct_combo.currentData()
+        if not acct_no:
+            QMessageBox.warning(self, "No Account", "Select an account.")
+            return
+        self._run_targeted_export([acct_no])
+
+    def _export_group(self):
+        if not self._export_dir or not self._current_editor:
+            QMessageBox.warning(self, "Not Ready", "Choose an output folder and select a template first.")
+            return
+        bccode = self.group_combo.currentData()
+        if not bccode:
+            QMessageBox.warning(self, "No Group", "No marketing program available.")
+            return
+        with get_session() as session:
+            account_numbers = [
+                a.account_number
+                for a in session.query(Account)
+                .join(Account.marketing_program)
+                .filter(
+                    Account.is_active == True,
+                    MarketingProgram.bccode == bccode,
+                )
+                .all()
+            ]
+        if not account_numbers:
+            QMessageBox.information(self, "No Accounts", f"No active accounts in program {bccode}.")
+            return
+        self._run_targeted_export(account_numbers)
+
+    def _run_targeted_export(self, account_numbers: list):
+        cfg = self._current_editor.get_config()
+        self.btn_export.setEnabled(False)
+        self.btn_export_single.setEnabled(False)
+        self.btn_export_group.setEnabled(False)
+        self.export_progress.setVisible(True)
+        self.export_progress.setValue(0)
+
+        self._export_worker = TargetedExportWorker(
+            self._export_dir, self._end, cfg, account_numbers, parent=self
+        )
+        self._export_worker.progress.connect(
+            lambda p, m: (
+                self.export_progress.setValue(p),
+                self.export_status.setText(m),
+            )
+        )
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.start()
 
     def _export_all(self):
         if not self._export_dir:
@@ -471,6 +689,8 @@ class PdfTemplateView(QWidget):
 
         cfg = self._current_editor.get_config()
         self.btn_export.setEnabled(False)
+        self.btn_export_single.setEnabled(False)
+        self.btn_export_group.setEnabled(False)
         self.export_progress.setVisible(True)
         self.export_progress.setValue(0)
 
@@ -488,7 +708,10 @@ class PdfTemplateView(QWidget):
 
     def _on_export_finished(self, success: bool, msg: str, count: int):
         self.export_progress.setVisible(False)
-        self.btn_export.setEnabled(True)
+        if self._export_dir:
+            self.btn_export.setEnabled(True)
+            self.btn_export_single.setEnabled(True)
+            self.btn_export_group.setEnabled(True)
         if success:
             QMessageBox.information(
                 self, "Export Complete",

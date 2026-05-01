@@ -13,6 +13,7 @@ The app caches SQL Server data locally in SQLite so it works offline after a syn
 | UI | Python 3.11 + PyQt6 6.11.0 |
 | Local DB | SQLAlchemy 2.0 + SQLite (WAL mode) |
 | Remote DB | SQL Server `NRFVMSSQL04/NRF_REPORTS`, Windows auth |
+| Cloud Backup | MySQL via PyMySQL 2.2.8 — live sync to `tfnflooring.com` |
 | PDF generation | ReportLab |
 | Charts | Matplotlib (QtAgg backend) |
 | Python env | `C:\rtenv` (short path required — Windows MAX_PATH issue with PyQt6 QML) |
@@ -40,7 +41,8 @@ rebate tracking/
 ├── services/
 │   ├── rebate_calculator.py       # Core calculation engine (no UI/DB imports)
 │   ├── pdf_generator.py           # ReportLab PDF statement builder
-│   └── backup.py                  # JSON backup/restore
+│   ├── cloud_backup.py            # MySQL live backup: CloudBackupWorker (QThread singleton) + push/pull/restore
+│   └── backup.py                  # JSON backup/restore (local file)
 ├── ui/
 │   ├── main_window.py             # App shell: sidebar + TopBar + QStackedWidget
 │   ├── theme.py                   # Colour constants (C dict)
@@ -98,11 +100,21 @@ rebate tracking/
 | `cost_center_filter` | `orders_field` | How cost center is filtered |
 | `cost_center_orders_field` | `COST_CENTER` | Column name in _ORDERS for cost center |
 
+### App Settings for MySQL Cloud Backup
+| Setting key | Default | What it controls |
+|---|---|---|
+| `mysql_host` | `tfnflooring.com` | Cloud DB host |
+| `mysql_port` | `3306` | Cloud DB port |
+| `mysql_database` | `dbcnqdrgsooaia` | Cloud DB name |
+| `mysql_user` | `nrfselec_wp404` | Cloud DB user |
+| `mysql_password` | `""` | Cloud DB password (user enters in Settings UI; never hardcoded) |
+
 ---
 
 ## Rebate Calculation Logic
 - **Period:** Always starts from `account.start_date` (anniversary-based), not Jan 1.
 - **Prior year:** Same relative window shifted back exactly one year.
+- **Rebate exclusions:** `COST_CENTER='041'` (unfinished wood) and direct-ship orders (`OPENPO_H.H@WARE='DIR'`, joined via `_ORDERS.[ORDER#] = OPENPO_H.[H@REF#]`) are excluded from `rebate_eligible_sales` but still count toward tier thresholds (tracked in `total_sales`). Rate is prorated by `elig_frac = eligible / total`.
 - **Tier types (per tier, not per structure):**
   - `sales` — rate applied to total current sales
   - `growth` — rate applied to `max(0, current_sales - prior_year_sales)`
@@ -111,6 +123,17 @@ rebate tracking/
   - `dollar_one` — rate applies to ALL sales from dollar one when threshold is crossed (overrides lower tiers)
   - `forward_only` — rate applies only to incremental sales above the threshold (stacks)
 - `structure_type` field in DB is kept for backward compat but new structures are always `"tiered"` with `applies_to` per tier.
+
+---
+
+## Cloud Backup
+- **Service:** `services/cloud_backup.py` — MySQL via PyMySQL 2.2.8.
+- **Table:** `rebate_tracker_snapshots` (columns: `table_name` PK, `snapshot_json` LONGTEXT, `updated_at` DATETIME).
+- **Singleton:** `CloudBackupWorker(QThread)` — use `CloudBackupWorker._instance` to get the running instance. `schedule()` debounces 3 s then calls `push_backup()`.
+- **Trigger:** `log_audit()` calls `_instance.schedule()` after every write, so backup is always live.
+- **Credentials:** Never hardcoded. Non-sensitive defaults seeded in `app_settings`; password is empty by default — user enters in Settings → Cloud Backup.
+- **Restore:** `restore_from_cloud()` pulls JSON snapshot then delegates to `import_backup()` via tempfile. App must restart after restore.
+- **Excluded from backup:** `sales_cache`, `audit_log`, `mysql_password` setting.
 
 ---
 
@@ -126,6 +149,7 @@ Viewable in the **Audit Log** tab (sidebar nav index 4).
 - **Column typo:** Source DB has `ENTENDED_PRICE_NO_FUNDS` (not `EXTENDED_`).
 - **BILLTO table name:** The table is `dbo.BILLTO` (no underscore). `dbo.BILL_TO` gives "Invalid object name" error.
 - **BACCT# is numeric:** The `BACCT#` column is a numeric type. Must cast via `CAST(CAST([BACCT#] AS BIGINT) AS NVARCHAR(50))` — a plain `CAST([BACCT#] AS NVARCHAR)` would produce `50039.0` and not match string account numbers.
+- **OPENPO_H join:** Table is `dbo.OPENPO_H`. Join key is `_ORDERS.[ORDER#] = OPENPO_H.[H@REF#]`. Field `H@WARE` = `'DIR'` means direct ship (excluded from rebate-eligible sales).
 - **BACCT# field:** BILL_TO account number column is `BACCT#` — must be quoted as `[BACCT#]` in T-SQL. Old default was wrong (`BACCT`); migration in `init_db()` fixes live DBs.
 - **QThread.start() shadowing:** Never use `self.start = value` inside a QThread subclass — it overwrites the `start()` method. Use `self._start`.
 - **Session detached objects:** Always capture data inside `with get_session()` before opening dialogs; open fresh sessions for writes.

@@ -355,6 +355,12 @@ class MainWindow(QMainWindow):
         ]:
             self.stack.addWidget(view)
 
+        # Start the cloud backup worker singleton so it can receive schedule() calls
+        from services.cloud_backup import CloudBackupWorker
+        self._cloud_worker = CloudBackupWorker(self)
+        CloudBackupWorker._instance = self._cloud_worker
+        self._cloud_worker.status_changed.connect(self._on_cloud_backup_status)
+
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
@@ -412,6 +418,19 @@ class MainWindow(QMainWindow):
             start, end = self.top_bar.get_date_range()
             self.view_dashboard.refresh(start, end)
             self.view_accounts.refresh()
+            # Trigger a cloud backup after a successful sync (sales cache excluded)
+            if hasattr(self, "_cloud_worker"):
+                self._cloud_worker.schedule()
+
+    def _on_cloud_backup_status(self, success: bool, msg: str) -> None:
+        """Show cloud backup result unobtrusively in the status bar."""
+        if success:
+            from datetime import datetime
+            ts = datetime.now().strftime("%H:%M")
+            self.status_bar.showMessage(f"☁  Cloud backup updated at {ts}.", 6000)
+        else:
+            # Only log — don't interrupt the user with a dialog for background failures
+            self.status_bar.showMessage(f"☁  Cloud backup: {msg}", 8000)
 
 
 # ---------------------------------------------------------------------------

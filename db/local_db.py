@@ -401,6 +401,12 @@ def init_db() -> None:
         _seed_setting(session, "bill_to_account_field", "BACCT#")  # BILLTO column that holds account number
         _seed_setting(session, "cost_center_filter", "orders_field")  # 'item_join' | 'orders_field'
         _seed_setting(session, "cost_center_orders_field", "COST_CENTER")  # If cost_center_filter=orders_field
+        # Cloud backup MySQL connection (non-sensitive defaults only; password stored by user)
+        _seed_setting(session, "mysql_host", "tfnflooring.com")
+        _seed_setting(session, "mysql_port", "3306")
+        _seed_setting(session, "mysql_database", "dbcnqdrgsooaia")
+        _seed_setting(session, "mysql_user", "nrfselec_wp404")
+        _seed_setting(session, "mysql_password", "")  # entered via Settings UI
 
         # Migration: fix BACCT -> BACCT# if the old wrong default was seeded
         row = session.query(AppSetting).filter_by(key="bill_to_account_field").first()
@@ -468,3 +474,11 @@ def log_audit(
             ))
     except Exception:
         pass  # Audit logging must never crash the app
+
+    # Trigger a live cloud backup in the background (fire-and-forget)
+    try:
+        from services.cloud_backup import CloudBackupWorker
+        if CloudBackupWorker._instance is not None:
+            CloudBackupWorker._instance.schedule()
+    except Exception:
+        pass  # Cloud backup must never crash the app

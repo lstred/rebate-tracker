@@ -53,6 +53,30 @@ class ConnectionTestWorker(QThread):
             self.result.emit(False, str(exc))
 
 
+class CloudTestWorker(QThread):
+    result = pyqtSignal(bool, str)
+
+    def run(self):
+        try:
+            from services.cloud_backup import test_connection as cloud_test
+            ok, msg = cloud_test()
+            self.result.emit(ok, msg)
+        except Exception as exc:
+            self.result.emit(False, str(exc))
+
+
+class CloudRestoreWorker(QThread):
+    finished = pyqtSignal(bool, str)
+
+    def run(self):
+        try:
+            from services.cloud_backup import restore_from_cloud
+            ok, msg = restore_from_cloud()
+            self.finished.emit(ok, msg)
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Settings view
 # ---------------------------------------------------------------------------
@@ -181,6 +205,75 @@ class SettingsView(QWidget):
 
         root.addWidget(backup_group)
 
+        # ── Cloud Backup (MySQL) ───────────────────────────────────────
+        cloud_group = QGroupBox("Cloud Backup — MySQL")
+        cloud_layout = QVBoxLayout(cloud_group)
+        cloud_layout.setSpacing(10)
+
+        cloud_help = QLabel(
+            "Keeps a live copy of all your user-configured data in a remote MySQL "
+            "database.  A backup is pushed automatically within a few seconds of "
+            "every change.  Sales cache and audit trail are NOT stored in the cloud."
+        )
+        cloud_help.setWordWrap(True)
+        cloud_help.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        cloud_layout.addWidget(cloud_help)
+
+        cloud_form = QFormLayout()
+        cloud_form.setSpacing(8)
+
+        self.mysql_host = QLineEdit(get_setting("mysql_host", ""))
+        self.mysql_host.setPlaceholderText("e.g. tfnflooring.com")
+        cloud_form.addRow("Host:", self.mysql_host)
+
+        self.mysql_port = QLineEdit(get_setting("mysql_port", "3306"))
+        self.mysql_port.setPlaceholderText("3306")
+        self.mysql_port.setFixedWidth(80)
+        cloud_form.addRow("Port:", self.mysql_port)
+
+        self.mysql_database = QLineEdit(get_setting("mysql_database", ""))
+        self.mysql_database.setPlaceholderText("database name")
+        cloud_form.addRow("Database:", self.mysql_database)
+
+        self.mysql_user = QLineEdit(get_setting("mysql_user", ""))
+        self.mysql_user.setPlaceholderText("username")
+        cloud_form.addRow("Username:", self.mysql_user)
+
+        self.mysql_password = QLineEdit(get_setting("mysql_password", ""))
+        self.mysql_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.mysql_password.setPlaceholderText("••••••••")
+        cloud_form.addRow("Password:", self.mysql_password)
+
+        cloud_layout.addLayout(cloud_form)
+
+        cloud_btn_row = QHBoxLayout()
+        btn_save_cloud = QPushButton("Save Credentials")
+        btn_save_cloud.setProperty("class", "primary")
+        btn_save_cloud.clicked.connect(self._save_cloud_settings)
+        cloud_btn_row.addWidget(btn_save_cloud)
+
+        btn_test_cloud = QPushButton("Test Connection")
+        btn_test_cloud.clicked.connect(self._test_cloud_connection)
+        cloud_btn_row.addWidget(btn_test_cloud)
+
+        btn_push_now = QPushButton("⬆  Backup Now")
+        btn_push_now.clicked.connect(self._push_cloud_backup)
+        cloud_btn_row.addWidget(btn_push_now)
+
+        btn_restore_cloud = QPushButton("⬇  Restore from Cloud")
+        btn_restore_cloud.setProperty("class", "danger")
+        btn_restore_cloud.clicked.connect(self._restore_from_cloud)
+        cloud_btn_row.addWidget(btn_restore_cloud)
+
+        cloud_btn_row.addStretch()
+        cloud_layout.addLayout(cloud_btn_row)
+
+        self.cloud_status = QLabel("")
+        self.cloud_status.setWordWrap(True)
+        cloud_layout.addWidget(self.cloud_status)
+
+        root.addWidget(cloud_group)
+
         # ── About ─────────────────────────────────────────────────────
         about_group = QGroupBox("About")
         about_layout = QVBoxLayout(about_group)
@@ -274,6 +367,95 @@ class SettingsView(QWidget):
             QMessageBox.information(
                 self, "Restore Complete",
                 msg + "\n\nPlease restart the application to reload all views."
+            )
+        else:
+            QMessageBox.critical(self, "Restore Failed", msg)
+
+    # ------------------------------------------------------------------
+    # Cloud backup handlers
+    # ------------------------------------------------------------------
+
+    def _save_cloud_settings(self):
+        set_setting("mysql_host", self.mysql_host.text().strip())
+        set_setting("mysql_port", self.mysql_port.text().strip() or "3306")
+        set_setting("mysql_database", self.mysql_database.text().strip())
+        set_setting("mysql_user", self.mysql_user.text().strip())
+        set_setting("mysql_password", self.mysql_password.text())
+        self.cloud_status.setText("Credentials saved.")
+        self.cloud_status.setStyleSheet(f"color: {C['success']}; font-size: 11px;")
+
+    def _test_cloud_connection(self):
+        self._save_cloud_settings()
+        self.cloud_status.setText("Testing connection…")
+        self.cloud_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        self._cloud_test_worker = CloudTestWorker(self)
+        self._cloud_test_worker.result.connect(self._on_cloud_test_result)
+        self._cloud_test_worker.start()
+
+    def _on_cloud_test_result(self, ok: bool, msg: str):
+        color = C["success"] if ok else C["danger"]
+        prefix = "✓  " if ok else "✗  "
+        self.cloud_status.setText(prefix + msg)
+        self.cloud_status.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+    def _push_cloud_backup(self):
+        self._save_cloud_settings()
+        self.cloud_status.setText("Pushing backup to cloud…")
+        self.cloud_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        # Reuse the singleton worker so we don't open a second connection
+        try:
+            from services.cloud_backup import CloudBackupWorker
+            if CloudBackupWorker._instance is not None:
+                CloudBackupWorker._instance.schedule()
+                self.cloud_status.setText("Backup queued — will complete in the background.")
+            else:
+                # Fallback: run inline (window not yet ready)
+                from services.cloud_backup import push_backup
+                ok, msg = push_backup()
+                self._on_cloud_test_result(ok, msg)
+        except Exception as exc:
+            self._on_cloud_test_result(False, str(exc))
+
+    def _restore_from_cloud(self):
+        from PyQt6.QtWidgets import QMessageBox
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Restore from Cloud Backup")
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setText("<b>Are you sure you want to restore from the cloud backup?</b>")
+        msg_box.setInformativeText(
+            "This will permanently replace ALL of the following local data:\n\n"
+            "  • All tracked accounts and their settings\n"
+            "  • All rebate structures and tier configurations\n"
+            "  • All rebate structure assignments\n"
+            "  • All prior-year sales overrides\n"
+            "  • All PDF templates\n"
+            "  • Application settings\n\n"
+            "Your locally cached SQL Server sales data will NOT be affected.\n"
+            "The audit trail will NOT be affected.\n\n"
+            "This action cannot be undone.  The app must be restarted after restore."
+        )
+        msg_box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
+        )
+        msg_box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        msg_box.button(QMessageBox.StandardButton.Yes).setText("Yes, Restore from Cloud")
+        if msg_box.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        self.cloud_status.setText("Restoring from cloud…")
+        self.cloud_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        self._restore_worker = CloudRestoreWorker(self)
+        self._restore_worker.finished.connect(self._on_cloud_restore_finished)
+        self._restore_worker.start()
+
+    def _on_cloud_restore_finished(self, ok: bool, msg: str):
+        color = C["success"] if ok else C["danger"]
+        self.cloud_status.setText(msg)
+        self.cloud_status.setStyleSheet(f"color: {color}; font-size: 11px;")
+        if ok:
+            QMessageBox.information(
+                self, "Restore Complete",
+                msg + "\n\nPlease restart Rebate Tracker to reload all data."
             )
         else:
             QMessageBox.critical(self, "Restore Failed", msg)
