@@ -258,17 +258,18 @@ def get_period_sales(
     return total
 
 
-def get_period_both_sales(
+def get_period_sales_breakdown(
     account_number: str,
     period_start: date,
     period_end: date,
     session=None,
-) -> tuple[float, float]:
+) -> dict:
     """
-    Return (total_sales, rebate_eligible_sales) for an account and period.
-    total_sales          — all synced sales (used for threshold/tier qualification).
-    rebate_eligible_sales — excludes unfinished wood (COST_CENTER=041) and
-                            direct-ship orders (OPENPO_H.H@WARE=DIR).
+    Return a full sales breakdown dict for an account and period:
+      total      — all synced sales (used for tier threshold qualification)
+      eligible   — excludes DIR (direct-ship) and 041 (unfinished wood) by default
+      dir_sales  — amount attributable to direct-ship orders (excluded from eligible by default)
+      sales_041  — amount attributable to cost-center 041 (excluded from eligible by default)
     Applies SalesOverride when present; override amount treated as fully eligible.
     """
     own_session = session is None
@@ -295,16 +296,36 @@ def get_period_both_sales(
             .all()
         )
 
-        sql_total = sum(r.total_sales for r in raw_rows)
+        sql_total    = sum(r.total_sales for r in raw_rows)
         sql_eligible = sum(r.rebate_eligible_sales for r in raw_rows)
+        sql_dir      = sum(getattr(r, "dir_sales", 0.0) for r in raw_rows)
+        sql_041      = sum(getattr(r, "sales_041", 0.0) for r in raw_rows)
 
         if override:
             if override.mode == "replace":
-                return override.amount, override.amount
+                return {"total": override.amount, "eligible": override.amount,
+                        "dir_sales": 0.0, "sales_041": 0.0}
             else:  # add
-                return sql_total + override.amount, sql_eligible + override.amount
+                return {"total": sql_total + override.amount,
+                        "eligible": sql_eligible + override.amount,
+                        "dir_sales": sql_dir, "sales_041": sql_041}
 
-        return sql_total, sql_eligible
+        return {"total": sql_total, "eligible": sql_eligible,
+                "dir_sales": sql_dir, "sales_041": sql_041}
+
+
+def get_period_both_sales(
+    account_number: str,
+    period_start: date,
+    period_end: date,
+    session=None,
+) -> tuple[float, float]:
+    """
+    Return (total_sales, rebate_eligible_sales) for an account and period.
+    Preserved for backward compatibility — delegates to get_period_sales_breakdown.
+    """
+    bd = get_period_sales_breakdown(account_number, period_start, period_end, session)
+    return bd["total"], bd["eligible"]
 
 
 from contextlib import contextmanager
@@ -342,15 +363,19 @@ def calculate_account_rebate(
     """
     tiers = [Tier.from_dict(t, structure.structure_type) for t in structure.get_tiers()]
 
+    # Per-structure eligibility overrides
+    include_dir = getattr(structure, "include_dir", False)
+    include_041 = getattr(structure, "include_041", False)
+
     # Compute account-specific period
     effective_start, effective_end = get_account_period(account, period_end)
     prior_start, prior_end = get_prior_year_period(effective_start, effective_end)
 
     with get_session() as session:
-        current_sales, current_eligible = get_period_both_sales(
+        cy = get_period_sales_breakdown(
             account.account_number, effective_start, effective_end, session
         )
-        prior_sales, prior_eligible = get_period_both_sales(
+        py = get_period_sales_breakdown(
             account.account_number, prior_start, prior_end, session
         )
 
@@ -365,6 +390,20 @@ def calculate_account_rebate(
         )
         override_applied = override is not None
         override_note = f"Override ({override.mode}): ${override.amount:,.2f}" if override else ""
+
+    current_sales    = cy["total"]
+    current_eligible = cy["eligible"]
+    if include_dir:
+        current_eligible = min(current_eligible + cy["dir_sales"], current_sales)
+    if include_041:
+        current_eligible = min(current_eligible + cy["sales_041"], current_sales)
+
+    prior_sales    = py["total"]
+    prior_eligible = py["eligible"]
+    if include_dir:
+        prior_eligible = min(prior_eligible + py["dir_sales"], prior_sales)
+    if include_041:
+        prior_eligible = min(prior_eligible + py["sales_041"], prior_sales)
 
     growth = max(0.0, current_sales - prior_sales)
     eligible_growth = max(0.0, current_eligible - prior_eligible)

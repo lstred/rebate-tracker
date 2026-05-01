@@ -493,6 +493,8 @@ class DetailLoader(QThread):
                 "monthly": monthly,
                 "structure": structure,
                 "assignment": assignment,
+                "structure_is_custom": (not structure.is_template) if structure else False,
+                "structure_derived_from_id": getattr(structure, "derived_from_id", None) if structure else None,
                 "overrides": [
                     {
                         "id": o.id,
@@ -812,11 +814,17 @@ class AccountDetailPanel(QWidget):
 
         rr = d.get("rebate_result")
         structure: Optional[RebateStructure] = d.get("structure")
+        is_custom = d.get("structure_is_custom", False)
 
         # Structure label row
         struct_row = QHBoxLayout()
+        custom_tag = (
+            f" <span style='background:#f59e0b22; color:#f59e0b; border:1px solid #f59e0b55;"
+            f" border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;'>Custom</span>"
+            if is_custom else ""
+        )
         struct_name_lbl = QLabel(
-            f"Rebate Structure: <b>{structure.name if structure else '(none assigned)'}</b>"
+            f"Rebate Structure: <b>{structure.name if structure else '(none assigned)'}</b>{custom_tag}"
         )
         struct_name_lbl.setTextFormat(Qt.TextFormat.RichText)
         struct_row.addWidget(struct_name_lbl)
@@ -825,6 +833,18 @@ class AccountDetailPanel(QWidget):
         btn_assign.setProperty("class", "primary")
         btn_assign.clicked.connect(lambda: self._assign_structure())
         struct_row.addWidget(btn_assign)
+        if structure:
+            if is_custom:
+                btn_edit_custom = QPushButton("Edit Custom Rebate")
+                btn_edit_custom.clicked.connect(lambda: self._customize_rebate())
+                struct_row.addWidget(btn_edit_custom)
+                btn_reset = QPushButton("Reset to Template")
+                btn_reset.clicked.connect(lambda: self._reset_custom_rebate())
+                struct_row.addWidget(btn_reset)
+            else:
+                btn_customize = QPushButton("Customize")
+                btn_customize.clicked.connect(lambda: self._customize_rebate())
+                struct_row.addWidget(btn_customize)
         rebate_layout.addLayout(struct_row)
 
         # KPI row
@@ -1217,6 +1237,145 @@ class AccountDetailPanel(QWidget):
                 new_value=chosen,
             )
             self._rebuild()
+
+    def _customize_rebate(self):
+        """Open the StructureDialog to create/edit a per-account custom rebate."""
+        if not self._account:
+            return
+        from ui.views.rebate_structures_view import StructureDialog
+
+        structure = self._detail_data.get("structure") if self._detail_data else None
+        is_custom = self._detail_data.get("structure_is_custom", False) if self._detail_data else False
+
+        # Build a proxy for the dialog pre-populated with the current structure's data
+        class _Proxy:
+            pass
+
+        proxy = None
+        if structure:
+            proxy = _Proxy()
+            proxy.name = (
+                structure.name if is_custom
+                else f"Custom: {self._account.account_name or self._account.account_number}"
+            )
+            proxy.description = getattr(structure, "description", "") or ""
+            proxy.include_dir = getattr(structure, "include_dir", False)
+            proxy.include_041 = getattr(structure, "include_041", False)
+            _tiers = structure.get_tiers()
+            proxy.get_tiers = lambda: _tiers
+        else:
+            proxy = _Proxy()
+            proxy.name = f"Custom: {self._account.account_name or self._account.account_number}"
+            proxy.description = ""
+            proxy.include_dir = False
+            proxy.include_041 = False
+            proxy.get_tiers = lambda: []
+
+        dlg = StructureDialog(existing=proxy, parent=self)
+        dlg.setWindowTitle(
+            f"{'Edit' if is_custom else 'Customize'} Rebate: "
+            f"{self._account.account_name or self._account.account_number}"
+        )
+
+        if not dlg.exec():
+            return
+
+        data = dlg.get_data()
+
+        with get_session() as session:
+            if is_custom and structure:
+                # Update the existing custom structure in-place
+                custom = session.query(RebateStructure).filter_by(id=structure.id).first()
+                if custom and not custom.is_template:
+                    custom.name = data["name"]
+                    custom.description = data["description"]
+                    custom.include_dir = data.get("include_dir", False)
+                    custom.include_041 = data.get("include_041", False)
+                    custom.set_tiers(data["tiers"])
+                    log_audit(
+                        "edit", "rebate_structure", self._account.account_number,
+                        f"Edited custom rebate for {self._account.account_number}",
+                        new_value=data["name"],
+                    )
+            else:
+                # Create a new custom structure and assign it to this account
+                derived_from_id = structure.id if structure else None
+                custom = RebateStructure(
+                    name=data["name"],
+                    structure_type=data.get("structure_type", "tiered"),
+                    description=data.get("description", ""),
+                    is_template=False,
+                    include_dir=data.get("include_dir", False),
+                    include_041=data.get("include_041", False),
+                    derived_from_id=derived_from_id,
+                )
+                custom.set_tiers(data["tiers"])
+                session.add(custom)
+                session.flush()  # get the new ID
+
+                existing_assignment = (
+                    session.query(AccountRebateAssignment)
+                    .filter_by(account_number=self._account.account_number)
+                    .first()
+                )
+                if existing_assignment:
+                    existing_assignment.rebate_structure_id = custom.id
+                else:
+                    session.add(AccountRebateAssignment(
+                        account_number=self._account.account_number,
+                        rebate_structure_id=custom.id,
+                    ))
+                log_audit(
+                    "assign", "rebate_structure", self._account.account_number,
+                    f"Created custom rebate for {self._account.account_number}",
+                    new_value=data["name"],
+                )
+        self._rebuild()
+
+    def _reset_custom_rebate(self):
+        """Remove the per-account custom rebate and revert to the derived template."""
+        if not self._account or not self._detail_data:
+            return
+
+        structure = self._detail_data.get("structure")
+        derived_from_id = self._detail_data.get("structure_derived_from_id")
+
+        if not structure or structure.is_template:
+            return
+
+        msg = (
+            "Remove the custom rebate for this account and revert to the original template?"
+            if derived_from_id
+            else "Remove the custom rebate for this account? The account will have no structure assigned."
+        )
+        if (
+            QMessageBox.question(self, "Reset to Template", msg)
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        with get_session() as session:
+            assignment = (
+                session.query(AccountRebateAssignment)
+                .filter_by(account_number=self._account.account_number)
+                .first()
+            )
+            if derived_from_id:
+                if assignment:
+                    assignment.rebate_structure_id = derived_from_id
+            else:
+                if assignment:
+                    session.delete(assignment)
+
+            custom = session.query(RebateStructure).filter_by(id=structure.id).first()
+            if custom and not custom.is_template:
+                session.delete(custom)
+
+        log_audit(
+            "edit", "rebate_structure", self._account.account_number,
+            f"Removed custom rebate for {self._account.account_number}",
+        )
+        self._rebuild()
 
 
 # ---------------------------------------------------------------------------

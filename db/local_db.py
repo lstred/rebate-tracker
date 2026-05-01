@@ -199,6 +199,9 @@ class SalesCache(Base):
     total_sales: Mapped[float] = mapped_column(Float, nullable=False)
     # Sales eligible for rebate payment (excludes unfinished wood COST_CENTER=041 and direct-ship H@WARE=DIR)
     rebate_eligible_sales: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # Breakdown of excluded amounts (populated by sync; 0 for legacy rows until re-synced)
+    dir_sales: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    sales_041: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     def __repr__(self) -> str:
@@ -254,6 +257,11 @@ class RebateStructure(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     tiers_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     is_template: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Eligibility overrides: include DIR / 041 items in rebate calculation for this structure
+    include_dir: Mapped[bool] = mapped_column(Boolean, default=False)
+    include_041: Mapped[bool] = mapped_column(Boolean, default=False)
+    # For customer-level custom copies: id of the template this was derived from
+    derived_from_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -427,6 +435,31 @@ def init_db() -> None:
             conn.commit()
     except Exception:
         pass  # Column already exists — no-op
+
+    # Migration: add dir_sales and sales_041 breakdown columns to sales_cache
+    for _col, _def in [
+        ("dir_sales",  "REAL NOT NULL DEFAULT 0"),
+        ("sales_041",  "REAL NOT NULL DEFAULT 0"),
+    ]:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(f"ALTER TABLE sales_cache ADD COLUMN {_col} {_def}"))
+                conn.commit()
+        except Exception:
+            pass  # Column already exists — no-op
+
+    # Migration: add eligibility flags and derived_from_id to rebate_structures
+    for _col, _def in [
+        ("include_dir",     "BOOLEAN NOT NULL DEFAULT 0"),
+        ("include_041",     "BOOLEAN NOT NULL DEFAULT 0"),
+        ("derived_from_id", "INTEGER"),
+    ]:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(f"ALTER TABLE rebate_structures ADD COLUMN {_col} {_def}"))
+                conn.commit()
+        except Exception:
+            pass  # Column already exists — no-op
 
     # Migration: deactivate accounts marked as closed by the source system (*CLSD* prefix)
     with get_session() as session:

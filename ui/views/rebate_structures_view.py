@@ -24,6 +24,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -317,6 +318,36 @@ class StructureDialog(QDialog):
         sep.setStyleSheet(f"color:{C['border']};")
         layout.addWidget(sep)
 
+        # Eligibility overrides
+        elig_frame = QFrame()
+        elig_frame.setStyleSheet(
+            f"background:{C['surface2']}; border-radius:6px; padding:4px;"
+        )
+        elig_layout = QVBoxLayout(elig_frame)
+        elig_layout.setContentsMargins(16, 12, 16, 12)
+        elig_layout.setSpacing(6)
+
+        elig_title = QLabel("Rebate Eligibility Overrides")
+        elig_title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        elig_layout.addWidget(elig_title)
+
+        elig_desc = QLabel(
+            "By default, Direct-Ship (DIR) and Unfinished Wood (041) orders count toward "
+            "tier thresholds but are excluded from rebate calculations. "
+            "Enable below to include them."
+        )
+        elig_desc.setWordWrap(True)
+        elig_desc.setStyleSheet(f"color:{C['text_muted']}; font-size:10px;")
+        elig_layout.addWidget(elig_desc)
+
+        self.chk_dir = QCheckBox("Include Direct-Ship (DIR) orders in rebate calculations")
+        self.chk_041 = QCheckBox("Include Unfinished Wood (Cost Center 041) in rebate calculations")
+        self.chk_dir.setChecked(getattr(existing, "include_dir", False) if existing else False)
+        self.chk_041.setChecked(getattr(existing, "include_041", False) if existing else False)
+        elig_layout.addWidget(self.chk_dir)
+        elig_layout.addWidget(self.chk_041)
+        layout.addWidget(elig_frame)
+
         # Tier editor
         self.tier_editor = TierEditorWidget()
         if existing:
@@ -357,6 +388,8 @@ class StructureDialog(QDialog):
             "structure_type": "tiered",   # type is now per-tier via applies_to
             "description": self.desc_input.text().strip(),
             "tiers": self.tier_editor.get_tiers(),
+            "include_dir": self.chk_dir.isChecked(),
+            "include_041": self.chk_041.isChecked(),
         }
 
 
@@ -644,6 +677,8 @@ class RebateStructuresView(QWidget):
                     structure_type=data["structure_type"],
                     description=data["description"],
                     is_template=True,
+                    include_dir=data.get("include_dir", False),
+                    include_041=data.get("include_041", False),
                 )
                 struct.set_tiers(data["tiers"])
                 session.add(struct)
@@ -665,6 +700,8 @@ class RebateStructuresView(QWidget):
                 "structure_type": struct.structure_type,
                 "description": struct.description or "",
                 "tiers": struct.get_tiers(),
+                "include_dir": getattr(struct, "include_dir", False),
+                "include_041": getattr(struct, "include_041", False),
             }
 
         # Build a lightweight proxy for the dialog
@@ -676,6 +713,8 @@ class RebateStructuresView(QWidget):
         proxy.structure_type = snap["structure_type"]
         proxy.description = snap["description"]
         proxy.get_tiers = lambda: snap["tiers"]
+        proxy.include_dir = snap["include_dir"]
+        proxy.include_041 = snap["include_041"]
 
         dlg = StructureDialog(proxy, parent=self)
         if dlg.exec():
@@ -686,6 +725,8 @@ class RebateStructuresView(QWidget):
                     struct.name = data["name"]
                     struct.structure_type = data["structure_type"]
                     struct.description = data["description"]
+                    struct.include_dir = data.get("include_dir", False)
+                    struct.include_041 = data.get("include_041", False)
                     struct.set_tiers(data["tiers"])
         self._load_structures()
 

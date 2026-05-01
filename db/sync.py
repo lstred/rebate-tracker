@@ -93,7 +93,15 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
                 WHEN o.[{cc_field}] = '041'    THEN 0
                 WHEN d.[H@REF#]     IS NOT NULL THEN 0
                 ELSE o.ENTENDED_PRICE_NO_FUNDS
-            END)                                     AS rebate_eligible_sales
+            END)                                     AS rebate_eligible_sales,
+            SUM(CASE
+                WHEN d.[H@REF#]     IS NOT NULL THEN o.ENTENDED_PRICE_NO_FUNDS
+                ELSE 0
+            END)                                     AS dir_sales,
+            SUM(CASE
+                WHEN o.[{cc_field}] = '041'    THEN o.ENTENDED_PRICE_NO_FUNDS
+                ELSE 0
+            END)                                     AS sales_041
         FROM dbo._ORDERS o
         {item_join}
         LEFT JOIN dir_orders d ON o.[ORDER#] = d.[H@REF#]
@@ -216,6 +224,8 @@ def sync_sales(
                 "invoice_date": parsed_date,
                 "total_sales": float(row["total_sales"] or 0.0),
                 "rebate_eligible_sales": float(row.get("rebate_eligible_sales") or 0.0),
+                "dir_sales": float(row.get("dir_sales") or 0.0),
+                "sales_041": float(row.get("sales_041") or 0.0),
                 "last_synced_at": datetime.utcnow(),
             }
         )
