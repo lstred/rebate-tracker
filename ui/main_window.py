@@ -443,6 +443,9 @@ class MainWindow(QMainWindow):
             self.view_accounts._load_accounts()
             if self.view_accounts.detail_panel._account:
                 self.view_accounts.detail_panel._rebuild()
+        # Redraw dashboard chart with new palette
+        if hasattr(self, "view_dashboard"):
+            self.view_dashboard.refresh_theme()
 
 
 # ---------------------------------------------------------------------------

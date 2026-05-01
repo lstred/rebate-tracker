@@ -143,10 +143,17 @@ rebate tracking/
 ## Theme System
 - **Palettes:** `_DARK` and `_LIGHT` dicts defined in `ui/theme.py`. Global mutable `C` dict starts as a copy of `_DARK`.
 - **`apply_theme(theme_name)`:** Clears and updates `C` in-place, rebuilds `STYLESHEET` via `_build_stylesheet()`, returns the new QSS string. Caller does `QApplication.instance().setStyleSheet(apply_theme(...))`.
-- **Startup:** `main_window.py` reads `get_setting("theme", "dark")` and calls `_apply_theme()` if not dark (dark is already applied at import time).
-- **Persistence:** `settings_view.py` writes `theme` setting and emits `theme_changed` signal; `MainWindow._apply_theme()` handles the signal.
-- **Light palette:** bg=`#F0F2F5`, surface=`#FFFFFF`, accent=`#2563EB`, text=`#1F2328`, sidebar=`#FFFFFF`, sidebar_sel=`#DBEAFE`.
-- **Caution:** Any code that f-strings `C` values at class/module level (not at draw time) will not update on theme switch. Always reference `C["key"]` at draw/paint time.
+- **`apply_mpl_style()`:** Rebuilds matplotlib rcParams from **current C** values (NOT a cached dict). Call after `apply_theme()` to update charts.
+- **Startup:** `main_window.py` reads `get_setting("theme", "dark")` and calls `_apply_theme()` if not dark.
+- **`MainWindow._apply_theme()`:** Sets app QSS, reloads account gallery (`_load_accounts()`), rebuilds account detail if open, calls `view_dashboard.refresh_theme()` to re-draw chart.
+- **`DashboardView.refresh_theme()`:** Calls `apply_mpl_style()` then `_update_ui()` (if data loaded) so chart redraws with correct colors.
+- **`BarChartCanvas._apply_colors()`:** Sets fig/ax facecolor + tick/spine colors from current C. Called at init AND in `plot()` (axes.clear() resets colors, so they must be reapplied each draw).
+- **Light palette:** bg=`#F0F4F8`, surface=`#FFFFFF`, accent=`#0969DA`, text=`#1F2328`, sidebar=`#FFFFFF`, sidebar_sel=`#EBF2FF`.
+- **Dark palette:** bg=`#0D1117`, surface=`#161B22`, accent=`#388BFD`, text=`#E6EDF3`, sidebar=`#0D1117`.
+- **Anti-pattern (AVOID):** Any code that f-strings `C` values at construction time with `setStyleSheet()` will NOT update on theme switch. Use `widget.setProperty("class", "classname")` and define the style in `_build_stylesheet()` QSS instead.
+- **QSS class selectors used:** `topbar`, `sidebar-widget`, `title-frame`, `left-panel`, `kpi-card`, `badge`, `vline-sep`, `hline-sep`, `card`, `card-flat`, `heading`, `subheading`, `muted`, `kpi-value`, `kpi-label`, `tag-success`, `tag-warning`, `tag-danger`, `primary`, `danger`, `success`, `nav`, `icon-btn`.
+- **TierProgressBar:** Uses `C["surface3"]`, `C["accent"]`, `C["success"]`, `C["text_dim"]`, `C["warning"]`, `C["text_muted"]` at paint time — safe for theme switching.
+- **Account gallery:** `setAlternatingRowColors(False)` — alternating row colors caused the system-palette AlternateBase (often white) to show through item widgets in dark mode.
 
 ---
 

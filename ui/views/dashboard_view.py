@@ -66,11 +66,11 @@ class KpiCard(QFrame):
 
         self._value_lbl = QLabel(value)
         self._value_lbl.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        self._value_lbl.setStyleSheet(f"color: {color};")
+        self._value_lbl.setStyleSheet(f"color: {color}; background: transparent;")
         self._value_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         self._label_lbl = QLabel(label)
-        self._label_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        self._label_lbl.setProperty("class", "muted")
         self._label_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         layout.addWidget(self._value_lbl)
@@ -92,9 +92,26 @@ class BarChartCanvas(FigureCanvas):
         super().__init__(self.fig)
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Apply theme colors immediately so the canvas is never white
+        self._apply_colors()
+
+    def _apply_colors(self) -> None:
+        self.fig.set_facecolor(C["surface"])
+        self.ax.set_facecolor(C["surface"])
+        self.ax.tick_params(colors=C["text_muted"])
+        self.ax.xaxis.label.set_color(C["text_muted"])
+        self.ax.yaxis.label.set_color(C["text_muted"])
+        for spine in self.ax.spines.values():
+            spine.set_edgecolor(C["border"])
+        self.draw()
 
     def plot(self, labels: list[str], values: list[float], title: str = "") -> None:
         self.ax.clear()
+        self.fig.set_facecolor(C["surface"])
+        self.ax.set_facecolor(C["surface"])
+        for spine in self.ax.spines.values():
+            spine.set_edgecolor(C["border"])
+        self.ax.tick_params(colors=C["text_muted"])
         if not labels:
             self.ax.text(
                 0.5, 0.5, "No data", transform=self.ax.transAxes,
@@ -123,8 +140,6 @@ class BarChartCanvas(FigureCanvas):
         self.ax.xaxis.set_major_formatter(
             plt.FuncFormatter(lambda x, _: f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}")
         )
-        self.fig.set_facecolor(C["surface"])
-        self.ax.set_facecolor(C["surface"])
         self.draw()
 
 
@@ -208,7 +223,6 @@ class DashboardView(QWidget):
         # Heading
         heading = QLabel("Dashboard")
         heading.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
-        heading.setStyleSheet(f"color: {C['text']};")
         root.addWidget(heading)
 
         # KPI row
@@ -232,7 +246,7 @@ class DashboardView(QWidget):
         chart_layout = QVBoxLayout(chart_card)
         chart_layout.setContentsMargins(12, 12, 12, 12)
         chart_lbl = QLabel("Top 10 Accounts by Sales")
-        chart_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-weight: bold;")
+        chart_lbl.setProperty("class", "muted")
         self.chart = BarChartCanvas()
         chart_layout.addWidget(chart_lbl)
         chart_layout.addWidget(self.chart)
@@ -243,7 +257,7 @@ class DashboardView(QWidget):
 
         # Full accounts table
         tbl_label = QLabel("All Accounts — Rebate Summary")
-        tbl_label.setStyleSheet(f"color: {C['text_muted']}; font-size:11px; font-weight:bold;")
+        tbl_label.setProperty("class", "muted")
         root.addWidget(tbl_label)
 
         self.table = AccountsTable()
@@ -298,3 +312,12 @@ class DashboardView(QWidget):
         self._start = start
         self._end = end
         self._load()
+
+    def refresh_theme(self) -> None:
+        """Re-apply matplotlib palette and redraw chart when theme changes."""
+        from ui.theme import apply_mpl_style
+        apply_mpl_style()
+        if self._data:
+            self._update_ui()
+        else:
+            self.chart._apply_colors()

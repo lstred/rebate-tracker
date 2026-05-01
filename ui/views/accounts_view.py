@@ -1475,7 +1475,7 @@ class AccountsView(QWidget):
 
         # Account list
         self.account_list = QListWidget()
-        self.account_list.setAlternatingRowColors(True)
+        self.account_list.setAlternatingRowColors(False)
         self.account_list.currentItemChanged.connect(self._on_account_selected)
         left_layout.addWidget(self.account_list)
 

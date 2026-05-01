@@ -477,9 +477,7 @@ class RebateStructuresView(QWidget):
         # ── Left panel ────────────────────────────────────────────────
         left = QFrame()
         left.setFixedWidth(300)
-        left.setStyleSheet(
-            f"background:{C['surface']}; border-right:1px solid {C['border']};"
-        )
+        left.setProperty("class", "left-panel")
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(12, 12, 12, 12)
         left_layout.setSpacing(8)

@@ -636,6 +636,31 @@ CHART_COLORS = [
 
 
 def apply_mpl_style() -> None:
-    """Apply the dark theme to matplotlib globally."""
+    """Apply the current theme palette to matplotlib rcParams."""
     import matplotlib.pyplot as plt
-    plt.rcParams.update(MPL_STYLE)
+    plt.rcParams.update({
+        "figure.facecolor":   C["surface"],
+        "axes.facecolor":     C["surface"],
+        "axes.edgecolor":     C["border"],
+        "axes.labelcolor":    C["text_muted"],
+        "axes.grid":          True,
+        "grid.color":         C["border"],
+        "grid.linestyle":     "--",
+        "grid.linewidth":     0.5,
+        "xtick.color":        C["text_muted"],
+        "ytick.color":        C["text_muted"],
+        "xtick.labelsize":    8,
+        "ytick.labelsize":    8,
+        "text.color":         C["text"],
+        "legend.facecolor":   C["surface2"],
+        "legend.edgecolor":   C["border"],
+        "legend.labelcolor":  C["text"],
+        "legend.fontsize":    8,
+        "figure.titlesize":   12,
+        "axes.titlesize":     11,
+        "axes.titlecolor":    C["text"],
+        "axes.labelsize":     9,
+        "savefig.facecolor":  C["surface"],
+        "lines.color":        C["accent"],
+        "patch.facecolor":    C["accent"],
+    })
