@@ -195,19 +195,19 @@ class TierProgressBar(QWidget):
 
         # Track
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#1a2a40"))
+        painter.setBrush(QColor(C.get("surface3", "#1a2a40")))
         painter.drawRoundedRect(0, bar_y, W, bar_h, 3, 3)
 
         # Projected area
         if proj_x > fill_x:
-            proj_col = QColor("#3b7dd8")
+            proj_col = QColor(C.get("accent", "#3b7dd8"))
             proj_col.setAlpha(55)
             painter.setBrush(proj_col)
             painter.drawRect(fill_x, bar_y, proj_x - fill_x, bar_h)
 
         # Current fill
         if fill_x > 0:
-            painter.setBrush(QColor("#3b7dd8"))
+            painter.setBrush(QColor(C.get("accent", "#3b7dd8")))
             painter.drawRoundedRect(0, bar_y, fill_x, bar_h, 3, 3)
 
         # Tier boundary ticks
@@ -216,7 +216,7 @@ class TierProgressBar(QWidget):
             if x <= 1 or x >= W - 1:
                 continue
             passed = self._current >= th
-            tick_col = QColor("#4ade80" if passed else "#4a5568")
+            tick_col = QColor(C.get("success", "#4ade80") if passed else C.get("text_dim", "#4a5568"))
             tick_w = 1 if self._mini else 2
             painter.setPen(QPen(tick_col, tick_w))
             painter.drawLine(x, bar_y, x, bar_y + bar_h)
@@ -235,7 +235,7 @@ class TierProgressBar(QWidget):
             path.lineTo(QPointF(cx - ds, cy))
             path.closeSubpath()
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#fbbf24"))
+            painter.setBrush(QColor(C.get("warning", "#fbbf24")))
             painter.drawPath(path)
 
         # Threshold labels (full mode only)
@@ -248,7 +248,7 @@ class TierProgressBar(QWidget):
                 if x <= 0:
                     continue
                 passed = self._current >= th
-                painter.setPen(QPen(QColor("#4ade80" if passed else "#6b7a99")))
+                painter.setPen(QPen(QColor(C.get("success", "#4ade80") if passed else C.get("text_muted", "#6b7a99"))))
                 if th >= 1_000_000:
                     lbl = f"T{i+1} ${th/1_000_000:.1f}M"
                 elif th >= 1_000:
@@ -296,11 +296,7 @@ class AccountGalleryItem(QWidget):
 
         if program_bccode:
             badge = QLabel(program_bccode)
-            badge.setStyleSheet(
-                f"background: {C['accent']}22; color: {C['accent']}; "
-                f"border: 1px solid {C['accent']}55; border-radius: 3px; "
-                f"padding: 0px 5px; font-size: 9px; font-weight: bold;"
-            )
+            badge.setProperty("class", "badge")
             badge.setFixedHeight(16)
             row1.addWidget(badge)
 
@@ -780,11 +776,7 @@ class AccountDetailPanel(QWidget):
         program_bccode = d.get("program_bccode", "")
         if program_bccode:
             pgm_badge = QLabel(program_bccode)
-            pgm_badge.setStyleSheet(
-                f"background: {C['accent']}22; color: {C['accent']}; "
-                f"border: 1px solid {C['accent']}55; border-radius: 4px; "
-                f"padding: 2px 8px; font-size: 11px; font-weight: bold;"
-            )
+            pgm_badge.setProperty("class", "badge")
             badge_row.addWidget(pgm_badge)
 
         src_badge = QLabel("Marketing Program" if a.source == "marketing_program" else "Manual")
@@ -876,9 +868,7 @@ class AccountDetailPanel(QWidget):
 
         def mini_kpi(label, value, color=C["text"]):
             f = QFrame()
-            f.setStyleSheet(
-                f"background:{C['surface2']}; border-radius:6px; padding:4px;"
-            )
+            f.setProperty("class", "kpi-card")
             l = QVBoxLayout(f)
             l.setContentsMargins(12, 8, 12, 8)
             v = QLabel(value)
@@ -1462,9 +1452,7 @@ class AccountsView(QWidget):
         # ── Left panel ────────────────────────────────────────────────
         left = QFrame()
         left.setFixedWidth(320)
-        left.setStyleSheet(
-            f"background-color: {C['surface']}; border-right: 1px solid {C['border']};"
-        )
+        left.setProperty("class", "left-panel")
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(12, 12, 12, 12)
         left_layout.setSpacing(8)

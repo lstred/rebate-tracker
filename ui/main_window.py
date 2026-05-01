@@ -84,9 +84,7 @@ class TopBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(52)
-        self.setStyleSheet(
-            f"background-color: {C['surface']}; border-bottom: 1px solid {C['border']};"
-        )
+        self.setProperty("class", "topbar")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 8, 16, 8)
@@ -94,14 +92,14 @@ class TopBar(QWidget):
 
         # Date range labels + pickers
         lbl_from = QLabel("From")
-        lbl_from.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
+        lbl_from.setProperty("class", "muted")
         self.date_start = QDateEdit()
         self.date_start.setCalendarPopup(True)
         self.date_start.setDisplayFormat("MM/dd/yyyy")
         self.date_start.setFixedWidth(120)
 
         lbl_to = QLabel("To")
-        lbl_to.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
+        lbl_to.setProperty("class", "muted")
         self.date_end = QDateEdit()
         self.date_end.setCalendarPopup(True)
         self.date_end.setDisplayFormat("MM/dd/yyyy")
@@ -129,7 +127,7 @@ class TopBar(QWidget):
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet(f"color: {C['border']};")
+        sep.setProperty("class", "vline-sep")
 
         # Sync button
         self.btn_sync = QPushButton("⟳  Refresh Data")
@@ -145,7 +143,7 @@ class TopBar(QWidget):
 
         # Status text
         self.lbl_status = QLabel("Ready")
-        self.lbl_status.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
+        self.lbl_status.setProperty("class", "muted")
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         for w in [lbl_from, self.date_start, lbl_to, self.date_end, self.btn_apply,
@@ -180,8 +178,10 @@ class TopBar(QWidget):
         self.lbl_status.setText(msg)
 
     def set_status(self, msg: str, color: str = "") -> None:
-        style = f"color: {color}; font-size:11px;" if color else f"color: {C['text_muted']}; font-size:11px;"
-        self.lbl_status.setStyleSheet(style)
+        if color:
+            self.lbl_status.setStyleSheet(f"color: {color}; font-size:11px;")
+        else:
+            self.lbl_status.setStyleSheet("")  # restore class-based QSS
         self.lbl_status.setText(msg)
 
 
@@ -206,7 +206,7 @@ class Sidebar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(220)
-        self.setStyleSheet(f"background-color: {C['sidebar']};")
+        self.setProperty("class", "sidebar-widget")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -215,17 +215,13 @@ class Sidebar(QWidget):
         # App title
         title_frame = QFrame()
         title_frame.setFixedHeight(64)
-        title_frame.setStyleSheet(
-            f"background-color: {C['sidebar']}; "
-            f"border-bottom: 1px solid {C['border']};"
-        )
+        title_frame.setProperty("class", "title-frame")
         title_layout = QVBoxLayout(title_frame)
         title_layout.setContentsMargins(20, 12, 20, 12)
         title_label = QLabel("Rebate Tracker")
         title_label.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        title_label.setStyleSheet(f"color: {C['text']}; letter-spacing: 0.5px;")
         subtitle = QLabel("Sales & Rebate Management")
-        subtitle.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        subtitle.setProperty("class", "muted")
         title_layout.addWidget(title_label)
         title_layout.addWidget(subtitle)
         layout.addWidget(title_frame)
@@ -245,7 +241,7 @@ class Sidebar(QWidget):
         # Divider
         div = QFrame()
         div.setFrameShape(QFrame.Shape.HLine)
-        div.setStyleSheet(f"color: {C['border']}; margin: 0 16px;")
+        div.setProperty("class", "hline-sep")
         layout.addWidget(div)
         layout.addSpacing(4)
 
@@ -442,9 +438,11 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app:
             app.setStyleSheet(qss)
-        else:
-            # Only log — don't interrupt the user with a dialog for background failures
-            self.status_bar.showMessage(f"☁  Cloud backup: {msg}", 8000)
+        # Reload gallery items so they pick up new theme colors
+        if hasattr(self, "view_accounts"):
+            self.view_accounts._load_accounts()
+            if self.view_accounts.detail_panel._account:
+                self.view_accounts.detail_panel._rebuild()
 
 
 # ---------------------------------------------------------------------------
