@@ -39,10 +39,10 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -61,16 +61,38 @@ from ui.theme import C
 # Tier editor widget
 # ---------------------------------------------------------------------------
 
+# Columns: # | Threshold | Applies To | Rate % | Mode | Delete
+_COL_NUM   = 0
+_COL_THRESH = 1
+_COL_APPLIES = 2
+_COL_RATE   = 3
+_COL_MODE   = 4
+_COL_DEL    = 5
+
+_APPLIES_OPTIONS = [
+    ("Sales (total)",       "sales"),
+    ("Growth (vs prior yr)", "growth"),
+    ("Freight %",            "freight"),
+]
+_APPLIES_LABELS = [o[0] for o in _APPLIES_OPTIONS]
+_APPLIES_VALUES = [o[1] for o in _APPLIES_OPTIONS]
+
+_MODE_BY_TYPE = {
+    "sales":   ["Dollar One (all sales)",  "Forward Only (incremental)"],
+    "growth":  ["Dollar One (all growth)", "Forward Only (incremental)"],
+    "freight": ["Qualifies at threshold"],
+}
+
+
 class TierEditorWidget(QWidget):
-    """Editable table of tiers for a rebate structure."""
+    """Editable table of tiers — each tier specifies what it applies to."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
-        # Header row
         hdr = QHBoxLayout()
         lbl = QLabel("Rebate Tiers")
         lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
@@ -82,83 +104,126 @@ class TierEditorWidget(QWidget):
         hdr.addWidget(btn_add)
         layout.addLayout(hdr)
 
-        # Helper text
         help_lbl = QLabel(
-            "Dollar One: reaching this tier applies rate to ALL sales.  "
-            "Forward Only: rate applies only on sales above this threshold."
+            "Sales: rebate on total sales.   "
+            "Growth: rebate on (current − prior year) once prior-year sales threshold is met.   "
+            "Freight: % of freight returned at threshold (informational — no $ calc).\n"
+            "Dollar One: rate applies to ALL qualifying sales.   "
+            "Forward Only: rate applies only on qualifying sales above this threshold."
         )
         help_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
         help_lbl.setWordWrap(True)
         layout.addWidget(help_lbl)
 
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["Tier", "Threshold ($)", "Rate (%)", "Mode", ""]
+            ["#", "Threshold ($)", "Applies To", "Rate (%)", "Mode", ""]
         )
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 50)
-        self.table.setColumnWidth(1, 140)
-        self.table.setColumnWidth(2, 100)
-        self.table.setColumnWidth(4, 80)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(_COL_NUM,     QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(_COL_THRESH,  QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(_COL_APPLIES, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(_COL_RATE,    QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(_COL_MODE,    QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(_COL_DEL,     QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(_COL_NUM,     42)
+        self.table.setColumnWidth(_COL_THRESH, 130)
+        self.table.setColumnWidth(_COL_APPLIES,155)
+        self.table.setColumnWidth(_COL_RATE,   105)
+        self.table.setColumnWidth(_COL_DEL,     52)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setWordWrap(False)
         layout.addWidget(self.table)
 
     def _add_tier(self):
         row = self.table.rowCount()
         self.table.insertRow(row)
-        self._setup_row(row, row + 1, 0.0, 0.0, "dollar_one")
+        self._setup_row(row, row + 1, 0.0, "sales", 0.0, "dollar_one")
 
-    def _setup_row(self, row: int, tier_num: int, threshold: float, rate: float, mode: str):
-        # Tier number (read-only label)
-        self.table.setItem(row, 0, self._ro_item(str(tier_num)))
+    def _setup_row(
+        self, row: int, tier_num: int,
+        threshold: float, applies_to: str,
+        rate: float, mode: str,
+    ):
+        self.table.setItem(row, _COL_NUM, self._ro_item(str(tier_num)))
 
-        # Threshold spinner
+        # Threshold
         thresh_spin = QDoubleSpinBox()
         thresh_spin.setPrefix("$")
         thresh_spin.setMaximum(999_999_999.0)
         thresh_spin.setDecimals(0)
+        thresh_spin.setSingleStep(1000)
         thresh_spin.setValue(threshold)
-        thresh_spin.setStyleSheet(f"background: {C['surface2']};")
-        self.table.setCellWidget(row, 1, thresh_spin)
+        thresh_spin.setStyleSheet(f"background:{C['surface2']}; padding:2px 4px;")
+        self.table.setCellWidget(row, _COL_THRESH, thresh_spin)
 
-        # Rate spinner
+        # Applies To
+        applies_combo = QComboBox()
+        applies_combo.addItems(_APPLIES_LABELS)
+        idx = _APPLIES_VALUES.index(applies_to) if applies_to in _APPLIES_VALUES else 0
+        applies_combo.setCurrentIndex(idx)
+        applies_combo.setStyleSheet(f"background:{C['surface2']};")
+        applies_combo.currentIndexChanged.connect(
+            lambda _, r=row: self._on_applies_changed(r)
+        )
+        self.table.setCellWidget(row, _COL_APPLIES, applies_combo)
+
+        # Rate
         rate_spin = QDoubleSpinBox()
         rate_spin.setSuffix(" %")
         rate_spin.setMaximum(100.0)
         rate_spin.setDecimals(3)
-        rate_spin.setValue(rate * 100)  # stored as decimal, display as %
-        rate_spin.setStyleSheet(f"background: {C['surface2']};")
-        self.table.setCellWidget(row, 2, rate_spin)
+        rate_spin.setSingleStep(0.5)
+        rate_spin.setValue(rate * 100)
+        rate_spin.setStyleSheet(f"background:{C['surface2']}; padding:2px 4px;")
+        self.table.setCellWidget(row, _COL_RATE, rate_spin)
 
-        # Mode combo
+        # Mode
         mode_combo = QComboBox()
-        mode_combo.addItems(["Dollar One (all sales)", "Forward Only (incremental)"])
-        mode_combo.setCurrentIndex(0 if mode == "dollar_one" else 1)
-        mode_combo.setStyleSheet(f"background: {C['surface2']};")
-        self.table.setCellWidget(row, 3, mode_combo)
+        mode_options = _MODE_BY_TYPE.get(applies_to, _MODE_BY_TYPE["sales"])
+        mode_combo.addItems(mode_options)
+        if applies_to == "freight":
+            mode_combo.setCurrentIndex(0)
+            mode_combo.setEnabled(False)
+        else:
+            mode_combo.setCurrentIndex(0 if mode == "dollar_one" else 1)
+        mode_combo.setStyleSheet(f"background:{C['surface2']};")
+        self.table.setCellWidget(row, _COL_MODE, mode_combo)
 
-        # Delete button
+        # Delete
         del_btn = QPushButton("✕")
         del_btn.setProperty("class", "danger")
-        del_btn.clicked.connect(lambda _, r=row: self._delete_row_by_widget())
-        del_btn.clicked.connect(self._refresh_tier_numbers)
-        self.table.setCellWidget(row, 4, del_btn)
+        del_btn.setFixedSize(34, 28)
+        del_btn.clicked.connect(self._delete_row_by_widget)
+        self.table.setCellWidget(row, _COL_DEL, del_btn)
+
+    def _on_applies_changed(self, row: int):
+        applies_combo = self.table.cellWidget(row, _COL_APPLIES)
+        mode_combo    = self.table.cellWidget(row, _COL_MODE)
+        if not applies_combo or not mode_combo:
+            return
+        applies_to = _APPLIES_VALUES[applies_combo.currentIndex()]
+        mode_options = _MODE_BY_TYPE.get(applies_to, _MODE_BY_TYPE["sales"])
+        mode_combo.blockSignals(True)
+        mode_combo.clear()
+        mode_combo.addItems(mode_options)
+        mode_combo.setEnabled(applies_to != "freight")
+        mode_combo.blockSignals(False)
 
     def _delete_row_by_widget(self):
-        # Identify which row's button was clicked
         sender = self.sender()
         for row in range(self.table.rowCount()):
-            widget = self.table.cellWidget(row, 4)
-            if widget is sender:
+            if self.table.cellWidget(row, _COL_DEL) is sender:
                 self.table.removeRow(row)
                 break
         self._refresh_tier_numbers()
 
     def _refresh_tier_numbers(self):
         for row in range(self.table.rowCount()):
-            self.table.setItem(row, 0, self._ro_item(str(row + 1)))
+            self.table.setItem(row, _COL_NUM, self._ro_item(str(row + 1)))
 
     @staticmethod
     def _ro_item(text: str) -> QTableWidgetItem:
@@ -170,21 +235,23 @@ class TierEditorWidget(QWidget):
     def get_tiers(self) -> list[dict]:
         tiers = []
         for row in range(self.table.rowCount()):
-            thresh = self.table.cellWidget(row, 1)
-            rate = self.table.cellWidget(row, 2)
-            mode_combo = self.table.cellWidget(row, 3)
-            if thresh and rate and mode_combo:
-                tiers.append(
-                    {
-                        "threshold": thresh.value(),
-                        "rate": round(rate.value() / 100, 6),
-                        "mode": (
-                            "dollar_one"
-                            if mode_combo.currentIndex() == 0
-                            else "forward_only"
-                        ),
-                    }
-                )
+            thresh      = self.table.cellWidget(row, _COL_THRESH)
+            applies_cb  = self.table.cellWidget(row, _COL_APPLIES)
+            rate        = self.table.cellWidget(row, _COL_RATE)
+            mode_combo  = self.table.cellWidget(row, _COL_MODE)
+            if not (thresh and applies_cb and rate and mode_combo):
+                continue
+            applies_to = _APPLIES_VALUES[applies_cb.currentIndex()]
+            if applies_to == "freight":
+                mode_val = "dollar_one"
+            else:
+                mode_val = "dollar_one" if mode_combo.currentIndex() == 0 else "forward_only"
+            tiers.append({
+                "threshold":  thresh.value(),
+                "applies_to": applies_to,
+                "rate":       round(rate.value() / 100, 6),
+                "mode":       mode_val,
+            })
         return sorted(tiers, key=lambda t: t["threshold"])
 
     def set_tiers(self, tiers: list[dict]):
@@ -194,6 +261,7 @@ class TierEditorWidget(QWidget):
             self._setup_row(
                 i, i + 1,
                 float(t.get("threshold", 0)),
+                t.get("applies_to", "sales"),
                 float(t.get("rate", 0)),
                 t.get("mode", "dollar_one"),
             )
@@ -206,54 +274,73 @@ class TierEditorWidget(QWidget):
 class StructureDialog(QDialog):
     def __init__(self, existing: Optional[RebateStructure] = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Rebate Structure" if existing else "New Rebate Structure")
-        self.setMinimumSize(640, 520)
+        self.setWindowTitle("Edit Rebate Structure" if existing else "New Rebate Structure")
+        self.setMinimumSize(960, 660)
+        self.setSizeGripEnabled(True)
         self.setStyleSheet(f"background-color: {C['surface']}; color: {C['text']};")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(14)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
+        # Scrollable body
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(28, 22, 28, 16)
+        layout.setSpacing(16)
+        scroll.setWidget(body)
+        root.addWidget(scroll, stretch=1)
+
+        # Name + description
         form = QFormLayout()
-        form.setSpacing(10)
+        form.setSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.name_input = QLineEdit(existing.name if existing else "")
-        self.name_input.setPlaceholderText("e.g. Standard Tiered 2024")
+        self.name_input.setPlaceholderText("e.g. Standard Growth 2026")
+        self.name_input.setMinimumHeight(32)
         form.addRow("Name:", self.name_input)
 
-        self.type_combo = QComboBox()
-        self.type_combo.addItems([
-            "Tiered (total sales)",
-            "Growth-Based (growth amount only)",
-        ])
-        if existing and existing.structure_type == "growth":
-            self.type_combo.setCurrentIndex(1)
-        form.addRow("Type:", self.type_combo)
-
-        self.desc_input = QTextEdit(existing.description or "" if existing else "")
-        self.desc_input.setMaximumHeight(60)
+        self.desc_input = QLineEdit(existing.description or "" if existing else "")
         self.desc_input.setPlaceholderText("Optional description")
+        self.desc_input.setMinimumHeight(32)
         form.addRow("Description:", self.desc_input)
 
         layout.addLayout(form)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color:{C['border']};")
+        layout.addWidget(sep)
 
         # Tier editor
         self.tier_editor = TierEditorWidget()
         if existing:
             self.tier_editor.set_tiers(existing.get_tiers())
         else:
-            # Start with one Tier 1 row at $0
             self.tier_editor.table.insertRow(0)
-            self.tier_editor._setup_row(0, 1, 0.0, 0.01, "dollar_one")
+            self.tier_editor._setup_row(0, 1, 0.0, "sales", 0.01, "dollar_one")
         layout.addWidget(self.tier_editor)
 
+        # Buttons (outside scroll)
+        btn_bar = QWidget()
+        btn_bar.setStyleSheet(f"background:{C['surface']}; border-top:1px solid {C['border']};")
+        btn_layout = QHBoxLayout(btn_bar)
+        btn_layout.setContentsMargins(28, 12, 28, 12)
+        btn_layout.addStretch()
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
+        btns.button(QDialogButtonBox.StandardButton.Save).setMinimumWidth(100)
         btns.accepted.connect(self._validate_and_accept)
         btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        btn_layout.addWidget(btns)
+        root.addWidget(btn_bar)
 
     def _validate_and_accept(self):
         if not self.name_input.text().strip():
@@ -267,10 +354,8 @@ class StructureDialog(QDialog):
     def get_data(self) -> dict:
         return {
             "name": self.name_input.text().strip(),
-            "structure_type": (
-                "growth" if self.type_combo.currentIndex() == 1 else "tiered"
-            ),
-            "description": self.desc_input.toPlainText().strip(),
+            "structure_type": "tiered",   # type is now per-tier via applies_to
+            "description": self.desc_input.text().strip(),
             "tiers": self.tier_editor.get_tiers(),
         }
 
@@ -509,18 +594,24 @@ class RebateStructuresView(QWidget):
 
         # Tiers summary
         tiers = struct.get_tiers()
+        _applies_display = {"sales": "Sales", "growth": "Growth", "freight": "Freight %"}
         if tiers:
-            tier_tbl = QTableWidget(len(tiers), 3)
-            tier_tbl.setHorizontalHeaderLabels(["Threshold", "Rate", "Mode"])
+            tier_tbl = QTableWidget(len(tiers), 4)
+            tier_tbl.setHorizontalHeaderLabels(["Threshold", "Applies To", "Rate", "Mode"])
+            tier_tbl.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
             tier_tbl.verticalHeader().setVisible(False)
             tier_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            tier_tbl.setMaximumHeight(24 * (len(tiers) + 2))
+            tier_tbl.verticalHeader().setDefaultSectionSize(30)
+            tier_tbl.setMaximumHeight(36 * (len(tiers) + 2))
             for i, t in enumerate(tiers):
-                tier_tbl.setItem(i, 0, QTableWidgetItem(f"${float(t['threshold']):,.0f}"))
-                tier_tbl.setItem(i, 1, QTableWidgetItem(f"{float(t['rate'])*100:.2f}%"))
-                tier_tbl.setItem(i, 2, QTableWidgetItem(
+                applies = t.get("applies_to", "sales")
+                mode_str = "Qualifies" if applies == "freight" else (
                     "Dollar One" if t.get("mode") == "dollar_one" else "Forward Only"
-                ))
+                )
+                tier_tbl.setItem(i, 0, QTableWidgetItem(f"${float(t['threshold']):,.0f}"))
+                tier_tbl.setItem(i, 1, QTableWidgetItem(_applies_display.get(applies, applies)))
+                tier_tbl.setItem(i, 2, QTableWidgetItem(f"{float(t['rate'])*100:.2f}%"))
+                tier_tbl.setItem(i, 3, QTableWidgetItem(mode_str))
             self.detail_layout.addWidget(tier_tbl)
 
         # Assignments table
@@ -567,24 +658,35 @@ class RebateStructuresView(QWidget):
             struct = session.query(RebateStructure).filter_by(id=struct_id).first()
             if not struct:
                 return
-            existing_data = {
+            # Capture data before session closes
+            snap = {
                 "id": struct.id,
                 "name": struct.name,
                 "structure_type": struct.structure_type,
-                "description": struct.description,
+                "description": struct.description or "",
                 "tiers": struct.get_tiers(),
             }
 
-        # Re-query fresh struct for dialog
-        with get_session() as session:
-            struct_obj = session.query(RebateStructure).filter_by(id=struct_id).first()
-            dlg = StructureDialog(struct_obj, parent=self)
-            if dlg.exec():
-                data = dlg.get_data()
-                struct_obj.name = data["name"]
-                struct_obj.structure_type = data["structure_type"]
-                struct_obj.description = data["description"]
-                struct_obj.set_tiers(data["tiers"])
+        # Build a lightweight proxy for the dialog
+        class _Proxy:
+            pass
+        proxy = _Proxy()
+        proxy.id = snap["id"]
+        proxy.name = snap["name"]
+        proxy.structure_type = snap["structure_type"]
+        proxy.description = snap["description"]
+        proxy.get_tiers = lambda: snap["tiers"]
+
+        dlg = StructureDialog(proxy, parent=self)
+        if dlg.exec():
+            data = dlg.get_data()
+            with get_session() as session:
+                struct = session.query(RebateStructure).filter_by(id=snap["id"]).first()
+                if struct:
+                    struct.name = data["name"]
+                    struct.structure_type = data["structure_type"]
+                    struct.description = data["description"]
+                    struct.set_tiers(data["tiers"])
         self._load_structures()
 
     def _delete_structure(self):

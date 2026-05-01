@@ -47,7 +47,7 @@ class DashboardLoader(QThread):
         self._end = end
 
     def run(self):
-        data = get_dashboard_summary(self._start, self._end)
+        data = get_dashboard_summary(self._end)
         self.ready.emit(data)
 
 

@@ -64,6 +64,7 @@ from services.rebate_calculator import (
     Tier,
     calculate_account_rebate,
     calculate_tiered_rebate,
+    get_account_period,
     get_monthly_sales,
     get_period_sales,
     get_prior_year_period,
@@ -104,10 +105,12 @@ class DetailLoader(QThread):
                 .all()
             )
 
+        # Use account start_date for rebate period; global range for monthly chart
+        effective_start, effective_end = get_account_period(self.account, self._end)
+        prior_start, prior_end = get_prior_year_period(effective_start, effective_end)
         current_sales = get_period_sales(
-            self.account.account_number, self._start, self._end
+            self.account.account_number, effective_start, effective_end
         )
-        prior_start, prior_end = get_prior_year_period(self._start, self._end)
         prior_sales = get_period_sales(
             self.account.account_number, prior_start, prior_end
         )
@@ -118,7 +121,7 @@ class DetailLoader(QThread):
         rebate_result = None
         if structure:
             rebate_result = calculate_account_rebate(
-                self.account, structure, self._start, self._end
+                self.account, structure, self._end
             )
 
         self.ready.emit(

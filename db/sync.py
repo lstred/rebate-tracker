@@ -167,7 +167,11 @@ def sync_sales(
     Fetch sales from SQL Server and upsert into local SalesCache.
     Returns the number of (account, date) rows processed.
     If account_numbers is None, fetches for ALL known tracked accounts.
+    If account_numbers is an empty list, returns 0 immediately (nothing to sync).
     """
+    if account_numbers is not None and len(account_numbers) == 0:
+        return 0
+
     sql_engine = get_sql_engine()
     query = _sales_query(account_numbers)
 

@@ -385,11 +385,20 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(msg)
 
     def _on_sync_finished(self, success: bool, msg: str) -> None:
+        from PyQt6.QtWidgets import QMessageBox
         self.top_bar.set_syncing(False)
         color = C["success"] if success else C["danger"]
         short = "Sync complete." if success else "Sync failed."
         self.top_bar.set_status(short, color)
-        self.status_bar.showMessage(msg)
+        self.status_bar.showMessage(msg[:300])
+
+        if not success:
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("Sync Failed")
+            dlg.setIcon(QMessageBox.Icon.Critical)
+            dlg.setText("Data sync from SQL Server failed.")
+            dlg.setDetailedText(msg)
+            dlg.exec()
 
         if success:
             # Refresh all views with fresh data

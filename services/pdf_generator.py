@@ -508,7 +508,7 @@ def generate_statement(
     output_path: Optional[str] = None,
 ) -> bytes:
     """Generate a single PDF statement and return raw bytes."""
-    result = calculate_account_rebate(account, structure, period_start, period_end)
+    result = calculate_account_rebate(account, structure, period_end)
     builder = StatementBuilder(template_config)
     return builder.build(account, result, structure, output_path=output_path)
 
