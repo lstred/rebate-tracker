@@ -962,8 +962,15 @@ class AccountDetailPanel(QWidget):
             for tr in rr.tier_results:
                 row = tier_tbl.rowCount()
                 tier_tbl.insertRow(row)
+                # Build a readable label from threshold and mode
+                if tr.threshold >= 1_000_000:
+                    thresh_str = f"${tr.threshold / 1_000_000:.1f}M+"
+                elif tr.threshold >= 1_000:
+                    thresh_str = f"${tr.threshold / 1_000:.0f}K+"
+                else:
+                    thresh_str = f"${tr.threshold:,.0f}+"
                 tier_tbl.setItem(row, 0, QTableWidgetItem(
-                    f"Tier {tr.tier_number} (${tr.threshold:,.0f}+, {tr.mode.replace('_',' ')})"
+                    f"{thresh_str}  {tr.rate*100:.2f}%  ({tr.mode.replace('_',' ')})"
                 ))
                 tier_tbl.setItem(row, 1, QTableWidgetItem(f"{tr.rate*100:.2f}%"))
                 tier_tbl.setItem(row, 2, QTableWidgetItem(f"${tr.applicable_sales:,.2f}"))

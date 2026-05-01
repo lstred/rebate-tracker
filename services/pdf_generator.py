@@ -384,18 +384,30 @@ class StatementBuilder:
             reached = eval_sales >= threshold
             status = "\u2713 Reached" if reached else "Not Reached"
 
-            # Find contribution from tier_results
+            # Match contribution by (threshold, rate, applies_to) — NOT by tier_number,
+            # because tier_number in TierResult is the within-subset index which does
+            # not correspond to the global tier number when freight tiers are interleaved.
             contribution = 0.0
             for tr in result.tier_results:
-                if tr.tier_number == tier_num:
+                if (
+                    abs(tr.threshold - threshold) < 0.01
+                    and abs(tr.rate - rate) < 0.00001
+                    and tr.applies_to == applies_to
+                ):
                     contribution = tr.rebate_contribution
+                    break
 
             if is_freight:
                 type_label = "Freight"
                 earned_label = f"{rate * 100:.0f}% Freight" if reached else "\u2014"
             else:
                 type_label = "All Sales (Dollar One)" if mode == "dollar_one" else "Incremental Only"
-                earned_label = f"${contribution:,.2f}" if reached else "\u2014"
+                if reached and not is_freight:
+                    # For dollar_one tiers that were superseded by a higher tier,
+                    # contribution will be 0 — show a dash to make it clear.
+                    earned_label = f"${contribution:,.2f}" if contribution > 0 else "\u2014"
+                else:
+                    earned_label = "\u2014"
 
             data.append([
                 f"Tier {tier_num}",
