@@ -49,16 +49,18 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
     Build the T-SQL query that fetches daily sales aggregates.
 
     Filters applied (per business rules):
-      • [INVOICE#]                  > 0
-      • ICCTR (from ITEM)           LIKE '0%'    ← or orders field — see settings
+      • [INVOICE#]                  IS NOT NULL AND <> 0  (excludes zero/null invoice records)
+      • COST_CENTER                 LIKE '0%'             (product sales only; or item join — see settings)
+      • COST_CENTER                 NOT LIKE '1%'         (explicit exclusion of cost centers starting with 1)
       • [ACCOUNT#I]                 NOT IN ('1')
-      • INVOICE_DATE_YYYYMMDD       > 0  (guards against null/zero dates)
+      • INVOICE_DATE_YYYYMMDD       > 0                   (guards against null/zero dates)
 
     Returns one row per (account_number, invoice_date) with:
-      total_sales          — all sales passing the above filter (used for threshold/tier qualification)
-      rebate_eligible_sales — excludes COST_CENTER=041 (unfinished wood) and
-                              direct-ship orders where OPENPO_H.[H@WARE] = 'DIR'
-                              (these count toward tiers but no rebate is paid on them)
+      total_sales           — all sales passing the above filters (used for threshold/tier qualification)
+      rebate_eligible_sales — further excludes COST_CENTER=041 (unfinished wood) and
+                              direct-ship orders (OPENPO_H.[H@WARE] = 'DIR').
+                              Uses EXISTS subquery — not LEFT JOIN — to avoid fan-out double-counting
+                              when an ORDER# has multiple rows in OPENPO_H.
     """
     cost_filter_mode = get_setting("cost_center_filter", "item_join")
     cc_field = get_setting("cost_center_orders_field", "COST_CENTER")
@@ -81,16 +83,20 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
             CAST(o.INVOICE_DATE_YYYYMMDD AS BIGINT)  AS invoice_date_raw,
             SUM(o.ENTENDED_PRICE_NO_FUNDS)           AS total_sales,
             SUM(CASE
-                WHEN o.[{cc_field}] = '041'   THEN 0
-                WHEN ph.[H@WARE]    = 'DIR'   THEN 0
+                WHEN o.[{cc_field}] = '041' THEN 0
+                WHEN EXISTS (
+                    SELECT 1 FROM dbo.OPENPO_H ph
+                    WHERE ph.[H@REF#] = o.[ORDER#]
+                      AND ph.[H@WARE] = 'DIR'
+                ) THEN 0
                 ELSE o.ENTENDED_PRICE_NO_FUNDS
             END)                                     AS rebate_eligible_sales
         FROM dbo._ORDERS o
         {item_join}
-        LEFT JOIN dbo.OPENPO_H ph ON o.[ORDER#] = ph.[H@REF#]
         WHERE
-            o.[INVOICE#] > 0
+            ISNULL(o.[INVOICE#], 0) <> 0
             {cost_where}
+            AND o.[{cc_field}] NOT LIKE '1%'
             AND CAST(o.[ACCOUNT#I] AS NVARCHAR) NOT IN ('1')
             AND o.INVOICE_DATE_YYYYMMDD > 0
             {acct_filter}
