@@ -20,8 +20,16 @@ import json
 from datetime import date
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QDate, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtCore import Qt, QDate, QThread, pyqtSignal, QPointF, QSize
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -75,8 +83,309 @@ from ui.theme import C
 
 
 # ---------------------------------------------------------------------------
-# Account detail loader (background)
+# Gallery utilities
 # ---------------------------------------------------------------------------
+
+def _days_to_next_anniversary(start_date: date) -> int:
+    """Days until start_date's next yearly anniversary (= rebate year renewal)."""
+    today = date.today()
+    try:
+        this_year = start_date.replace(year=today.year)
+    except ValueError:          # Feb 29 in a non-leap year
+        this_year = date(today.year, 3, 1)
+    if this_year > today:
+        return (this_year - today).days
+    try:
+        next_year = start_date.replace(year=today.year + 1)
+    except ValueError:
+        next_year = date(today.year + 1, 3, 1)
+    return (next_year - today).days
+
+
+# ---------------------------------------------------------------------------
+# Segmented tier progress bar
+# ---------------------------------------------------------------------------
+
+class TierProgressBar(QWidget):
+    """
+    Custom segmented rebate progress bar.
+
+    • Blue fill          — current-period sales (or growth)
+    • Translucent blue   — straight-line projected year-end total
+    • Amber diamond ◆    — projected year-end marker
+    • Green tick  |      — tier threshold already crossed
+    • Gray tick   |      — tier threshold not yet reached
+    • Tiers sharing a threshold are merged into one boundary marker
+      (e.g. a sales tier and a freight qualification at the same level)
+    • Full mode: shows $ threshold labels below the bar
+    • Mini mode: compact bar only (used in the gallery panel)
+    """
+
+    _BAR_H   = 22
+    _MINI_H  = 9
+
+    def __init__(
+        self,
+        tiers: list[dict],
+        current: float,
+        projected: float = 0.0,
+        mini: bool = False,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._mini = mini
+        self._segments: list[tuple[float, set]] = []
+        self._max = 1.0
+        self._current = 0.0
+        self._projected = 0.0
+        self.set_data(tiers, current, projected)
+
+        if mini:
+            self.setFixedHeight(self._MINI_H)
+            self.setMinimumWidth(60)
+        else:
+            self.setFixedHeight(self._BAR_H + 30)
+            self.setMinimumWidth(200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_data(self, tiers: list[dict], current: float, projected: float):
+        self._current = max(current, 0.0)
+        self._projected = max(projected, self._current)
+
+        seen: dict[float, set] = {}
+        for t in tiers:
+            th = float(t.get("threshold", 0))
+            seen.setdefault(th, set()).add(t.get("applies_to", "sales"))
+        self._segments = sorted(seen.items())
+
+        raw_max = self._segments[-1][0] if self._segments else max(self._current, 1.0)
+        self._max = max(raw_max * 1.10, self._projected * 1.05, self._current * 1.10, 1.0)
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W = self.width()
+        bar_h = self._MINI_H if self._mini else self._BAR_H
+        bar_y = 0
+
+        def frac(v: float) -> float:
+            return min(v / self._max, 1.0)
+
+        fill_x = int(W * frac(self._current))
+        proj_x = int(W * frac(self._projected))
+
+        # Track
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#1a2a40"))
+        painter.drawRoundedRect(0, bar_y, W, bar_h, 3, 3)
+
+        # Projected area
+        if proj_x > fill_x:
+            proj_col = QColor("#3b7dd8")
+            proj_col.setAlpha(55)
+            painter.setBrush(proj_col)
+            painter.drawRect(fill_x, bar_y, proj_x - fill_x, bar_h)
+
+        # Current fill
+        if fill_x > 0:
+            painter.setBrush(QColor("#3b7dd8"))
+            painter.drawRoundedRect(0, bar_y, fill_x, bar_h, 3, 3)
+
+        # Tier boundary ticks
+        for th, types in self._segments:
+            x = int(W * frac(th))
+            if x <= 1 or x >= W - 1:
+                continue
+            passed = self._current >= th
+            tick_col = QColor("#4ade80" if passed else "#4a5568")
+            tick_w = 1 if self._mini else 2
+            painter.setPen(QPen(tick_col, tick_w))
+            painter.drawLine(x, bar_y, x, bar_y + bar_h)
+            if not self._mini:
+                painter.drawLine(x, bar_y - 4, x, bar_y)
+
+        # Projected diamond marker
+        if self._projected > 0 and proj_x > 0:
+            ds = 3 if self._mini else 5
+            cx = min(proj_x, W - ds - 1)
+            cy = bar_y + bar_h // 2
+            path = QPainterPath()
+            path.moveTo(QPointF(cx,      cy - ds))
+            path.lineTo(QPointF(cx + ds, cy))
+            path.lineTo(QPointF(cx,      cy + ds))
+            path.lineTo(QPointF(cx - ds, cy))
+            path.closeSubpath()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#fbbf24"))
+            painter.drawPath(path)
+
+        # Threshold labels (full mode only)
+        if not self._mini and self._segments:
+            painter.setFont(QFont("Segoe UI", 8))
+            fm = QFontMetrics(painter.font())
+            lbl_y = bar_y + bar_h + 18
+            for i, (th, types) in enumerate(self._segments):
+                x = int(W * frac(th))
+                if x <= 0:
+                    continue
+                passed = self._current >= th
+                painter.setPen(QPen(QColor("#4ade80" if passed else "#6b7a99")))
+                if th >= 1_000_000:
+                    lbl = f"T{i+1} ${th/1_000_000:.1f}M"
+                elif th >= 1_000:
+                    lbl = f"T{i+1} ${th/1_000:.0f}K"
+                else:
+                    lbl = f"T{i+1} ${th:.0f}"
+                if "freight" in types and len(types) > 1:
+                    lbl += " ✦"
+                tw = fm.horizontalAdvance(lbl)
+                lx = max(0, min(x - tw // 2, W - tw))
+                painter.drawText(lx, lbl_y, lbl)
+
+        painter.end()
+
+
+# ---------------------------------------------------------------------------
+# Gallery card widget (one per account in the left panel)
+# ---------------------------------------------------------------------------
+
+class AccountGalleryItem(QWidget):
+    """
+    Rich gallery card for the account list panel.
+    Shows: account number, program badge, days-to-renewal, account name,
+    start date, and a mini segmented tier progress bar.
+    """
+
+    def __init__(self, account: Account, program_bccode: str = "", parent=None):
+        super().__init__(parent)
+        self._account = account
+        self._mini_bar: Optional[TierProgressBar] = None
+        self._build(program_bccode)
+
+    def _build(self, program_bccode: str):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 7, 10, 6)
+        layout.setSpacing(2)
+
+        # Row 1 — account number + program badge + renewal countdown
+        row1 = QHBoxLayout()
+        row1.setSpacing(5)
+
+        acct_lbl = QLabel(self._account.account_number)
+        acct_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        row1.addWidget(acct_lbl)
+
+        if program_bccode:
+            badge = QLabel(program_bccode)
+            badge.setStyleSheet(
+                f"background: {C['accent']}22; color: {C['accent']}; "
+                f"border: 1px solid {C['accent']}55; border-radius: 3px; "
+                f"padding: 0px 5px; font-size: 9px; font-weight: bold;"
+            )
+            badge.setFixedHeight(16)
+            row1.addWidget(badge)
+
+        row1.addStretch()
+
+        days = _days_to_next_anniversary(self._account.start_date)
+        if days <= 30:
+            days_color = C["danger"]
+        elif days <= 60:
+            days_color = "#f59e0b"
+        else:
+            days_color = C["text_muted"]
+        days_lbl = QLabel(f"{days}d")
+        days_lbl.setStyleSheet(
+            f"color: {days_color}; font-size: 9px; font-weight: bold;"
+        )
+        days_lbl.setToolTip(f"Rebate year renews in {days} days")
+        row1.addWidget(days_lbl)
+
+        layout.addLayout(row1)
+
+        # Row 2 — account name + start date
+        row2 = QHBoxLayout()
+        row2.setSpacing(0)
+
+        name_lbl = QLabel(self._account.account_name or "—")
+        name_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row2.addWidget(name_lbl, stretch=1)
+
+        start_lbl = QLabel(self._account.start_date.strftime("%m/%d"))
+        start_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 9px;")
+        start_lbl.setToolTip(f"Rebate start: {self._account.start_date.strftime('%m/%d/%Y')}")
+        row2.addWidget(start_lbl)
+
+        layout.addLayout(row2)
+
+        # Mini progress bar (placeholder until GalleryLoader fills it in)
+        self._mini_bar = TierProgressBar([], 0.0, 0.0, mini=True)
+        layout.addWidget(self._mini_bar)
+
+    def update_tier_data(self, tiers: list[dict], current: float, projected: float):
+        """Update the mini bar once background loading has the real data."""
+        if self._mini_bar:
+            self._mini_bar.set_data(tiers, current, projected)
+
+
+# ---------------------------------------------------------------------------
+# Gallery data loader — computes per-account sales + tier info from SQLite
+# ---------------------------------------------------------------------------
+
+class GalleryLoader(QThread):
+    """
+    Background thread that computes current-period sales and tier structure
+    for all tracked accounts so the gallery mini bars can be populated.
+    No SQL Server calls — reads only from the local SQLite cache.
+    """
+
+    ready = pyqtSignal(dict)   # account_number -> {tiers, current, projected}
+
+    def __init__(self, accounts: list, end: date, parent=None):
+        super().__init__(parent)
+        self._accounts = accounts
+        self._end = end
+
+    def run(self):
+        from services.rebate_calculator import get_account_period, get_period_sales
+        today = date.today()
+        result: dict = {}
+
+        with get_session() as session:
+            assignments = {
+                a.account_number: a
+                for a in session.query(AccountRebateAssignment).all()
+            }
+            structures = {
+                s.id: s
+                for s in session.query(RebateStructure).all()
+            }
+
+        for acct in self._accounts:
+            try:
+                p_start, p_end = get_account_period(acct, self._end)
+                current = get_period_sales(acct.account_number, p_start, p_end)
+
+                tiers: list = []
+                asn = assignments.get(acct.account_number)
+                if asn and asn.rebate_structure_id in structures:
+                    tiers = structures[asn.rebate_structure_id].get_tiers()
+
+                elapsed = max(1, (today - p_start).days)
+                total   = max(1, (p_end - p_start).days)
+                projected = current * total / elapsed
+
+                result[acct.account_number] = {
+                    "tiers": tiers,
+                    "current": current,
+                    "projected": projected,
+                }
+            except Exception:
+                result[acct.account_number] = {"tiers": [], "current": 0.0, "projected": 0.0}
+
+        self.ready.emit(result)
 
 class DetailLoader(QThread):
     ready = pyqtSignal(dict)
@@ -106,6 +415,14 @@ class DetailLoader(QThread):
                 .filter_by(account_number=self.account.account_number)
                 .all()
             )
+            # Fetch program BCCODE while session is open
+            program_bccode = ""
+            if self.account.marketing_program_id:
+                mp = session.query(MarketingProgram).filter_by(
+                    id=self.account.marketing_program_id
+                ).first()
+                if mp:
+                    program_bccode = mp.bccode or ""
 
         # Use account start_date for rebate period; monthly chart uses same account period
         effective_start, effective_end = get_account_period(self.account, self._end)
@@ -116,6 +433,13 @@ class DetailLoader(QThread):
         prior_sales = get_period_sales(
             self.account.account_number, prior_start, prior_end
         )
+
+        # Straight-line projected year-end total
+        today = date.today()
+        elapsed_days = max(1, (today - effective_start).days)
+        total_days   = max(1, (effective_end - effective_start).days)
+        projected_sales = current_sales * total_days / elapsed_days
+
         # Monthly: only current rebate year, with prior year side-by-side
         monthly = get_monthly_sales(
             self.account.account_number, effective_start, effective_end,
@@ -149,6 +473,8 @@ class DetailLoader(QThread):
                     for o in overrides
                 ],
                 "rebate_result": rebate_result,
+                "projected_sales": projected_sales,
+                "program_bccode": program_bccode,
             }
         )
 
@@ -404,12 +730,29 @@ class AccountDetailPanel(QWidget):
 
         info_layout.addLayout(name_col, stretch=3)
 
-        # Source badge + start date + edit button
+        # Source badge + program code + start date + edit button
         src_col = QVBoxLayout()
         src_col.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(6)
+        badge_row.addStretch()
+
+        # 3-char program code badge (if applicable)
+        program_bccode = d.get("program_bccode", "")
+        if program_bccode:
+            pgm_badge = QLabel(program_bccode)
+            pgm_badge.setStyleSheet(
+                f"background: {C['accent']}22; color: {C['accent']}; "
+                f"border: 1px solid {C['accent']}55; border-radius: 4px; "
+                f"padding: 2px 8px; font-size: 11px; font-weight: bold;"
+            )
+            badge_row.addWidget(pgm_badge)
+
         src_badge = QLabel("Marketing Program" if a.source == "marketing_program" else "Manual")
         src_badge.setProperty("class", "tag-success" if a.source == "marketing_program" else "tag-warning")
-        src_col.addWidget(src_badge)
+        badge_row.addWidget(src_badge)
+        src_col.addLayout(badge_row)
 
         start_row = QHBoxLayout()
         start_row.setSpacing(4)
@@ -487,31 +830,32 @@ class AccountDetailPanel(QWidget):
         )
         rebate_layout.addLayout(kpi_row)
 
-        # Tier progress bar (visual only)
+        # Segmented tier progress bar
         if rr and structure:
             tiers_raw = structure.get_tiers()
             if tiers_raw:
-                sorted_tiers = sorted(tiers_raw, key=lambda x: x.get("threshold", 0))
-                max_threshold = sorted_tiers[-1].get("threshold", 1)
                 eval_sales = (
                     rr.growth_amount if structure.structure_type == "growth"
                     else rr.current_sales
                 )
-                pct = min(100, int(eval_sales / max(max_threshold, 1) * 100))
+                projected = d.get("projected_sales", eval_sales)
+
+                is_growth = structure.structure_type == "growth"
+                sorted_thresh = sorted({t.get("threshold", 0) for t in tiers_raw})
+                max_threshold = sorted_thresh[-1] if sorted_thresh else 1
 
                 prog_label = QLabel(
-                    f"{'Growth' if structure.structure_type == 'growth' else 'Sales'} progress"
-                    f" toward Tier {len(sorted_tiers)}  —  "
-                    f"${eval_sales:,.0f} of ${max_threshold:,.0f}"
+                    f"{'Growth' if is_growth else 'Sales'}"
+                    f"  ·  <b>${eval_sales:,.0f}</b> current"
+                    f"  ·  <b>${projected:,.0f}</b> projected year-end"
+                    f"  ·  max tier ${max_threshold:,.0f}"
                 )
-                prog_label.setStyleSheet(f"color: {C['text_muted']}; font-size:10px;")
+                prog_label.setTextFormat(Qt.TextFormat.RichText)
+                prog_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
                 rebate_layout.addWidget(prog_label)
 
-                prog_bar = QProgressBar()
-                prog_bar.setValue(pct)
-                prog_bar.setTextVisible(True)
-                prog_bar.setFormat(f"{pct}%")
-                rebate_layout.addWidget(prog_bar)
+                tier_bar = TierProgressBar(tiers_raw, eval_sales, projected)
+                rebate_layout.addWidget(tier_bar)
 
         self._layout.addWidget(rebate_frame)
 
@@ -828,7 +1172,7 @@ class AccountsView(QWidget):
 
         # ── Left panel ────────────────────────────────────────────────
         left = QFrame()
-        left.setFixedWidth(280)
+        left.setFixedWidth(320)
         left.setStyleSheet(
             f"background-color: {C['surface']}; border-right: 1px solid {C['border']};"
         )
@@ -872,24 +1216,49 @@ class AccountsView(QWidget):
 
     def _load_accounts(self):
         with get_session() as session:
-            self._accounts = (
-                session.query(Account).filter_by(is_active=True)
-                .order_by(Account.account_name)
-                .all()
+            accounts = (
+                session.query(Account).filter_by(is_active=True).all()
             )
+            programs = {p.id: p.bccode or "" for p in session.query(MarketingProgram).all()}
+
+        # Build program lookup: account_number -> bccode
+        self._program_map: dict[str, str] = {
+            a.account_number: programs.get(a.marketing_program_id, "")
+            for a in accounts
+        }
+
+        # Sort by days until next rebate year anniversary (soonest renewals at top)
+        self._accounts = sorted(accounts, key=lambda a: _days_to_next_anniversary(a.start_date))
         self._populate_list(self._accounts)
 
-    def _populate_list(self, accounts: list[Account]):
+    def _populate_list(self, accounts: list):
         self.account_list.clear()
+        program_map = getattr(self, "_program_map", {})
         for acct in accounts:
-            # Always show account number first, name below (avoids duplication when name is null)
-            if acct.account_name:
-                label = f"{acct.account_number}\n{acct.account_name}"
-            else:
-                label = acct.account_number
-            item = QListWidgetItem(label)
+            bccode = program_map.get(acct.account_number, "")
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, acct.account_number)
+            item.setSizeHint(QSize(0, 74))
+            widget = AccountGalleryItem(acct, bccode)
             self.account_list.addItem(item)
+            self.account_list.setItemWidget(item, widget)
+        # Kick off background loader to fill mini progress bars
+        self._start_gallery_loader(accounts)
+
+    def _start_gallery_loader(self, accounts: list):
+        self._gallery_loader = GalleryLoader(accounts, self._end, self)
+        self._gallery_loader.ready.connect(self._on_gallery_loaded)
+        self._gallery_loader.start()
+
+    def _on_gallery_loaded(self, data: dict):
+        for i in range(self.account_list.count()):
+            item = self.account_list.item(i)
+            widget = self.account_list.itemWidget(item)
+            if isinstance(widget, AccountGalleryItem):
+                acct_no = item.data(Qt.ItemDataRole.UserRole)
+                if acct_no in data:
+                    d = data[acct_no]
+                    widget.update_tier_data(d["tiers"], d["current"], d["projected"])
 
     def _filter_list(self, text: str):
         text = text.lower()
@@ -897,6 +1266,7 @@ class AccountsView(QWidget):
             a for a in self._accounts
             if text in (a.account_name or "").lower()
             or text in a.account_number.lower()
+            or text in getattr(self, "_program_map", {}).get(a.account_number, "").lower()
         ]
         self._populate_list(filtered)
 

@@ -428,6 +428,19 @@ def init_db() -> None:
     except Exception:
         pass  # Column already exists — no-op
 
+    # Migration: deactivate accounts marked as closed by the source system (*CLSD* prefix)
+    with get_session() as session:
+        closed = (
+            session.query(Account)
+            .filter(
+                Account.is_active == True,
+                Account.account_name.ilike("*CLSD*%"),
+            )
+            .all()
+        )
+        for _a in closed:
+            _a.is_active = False
+
 
 def _seed_setting(session: Session, key: str, default_value: str) -> None:
     """Insert a setting only if it does not already exist."""

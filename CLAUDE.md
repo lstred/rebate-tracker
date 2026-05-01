@@ -137,7 +137,12 @@ rebate tracking/
 
 ---
 
-## Audit Trail
+## UI / Gallery Conventions
+- **Gallery panel** (left, 320 px): Custom `AccountGalleryItem` widgets — account number, program BCCODE badge, days-to-renewal countdown, account name, start date, mini `TierProgressBar`.
+- **Sort order:** Accounts sorted by days until next rebate-year anniversary (soonest renewals at top). Users can follow up before the new year starts.
+- **Renewal countdown colours:** ≤ 30 d = red, ≤ 60 d = amber, else muted.
+- **TierProgressBar:** Custom `QWidget` used both in the detail panel (full, with labels) and the gallery (mini, 9 px). Merges tiers sharing the same threshold into one boundary marker. Amber diamond ◆ shows straight-line projected year-end position. Green tick = threshold crossed, gray tick = not yet reached. Freight-only tiers at the same threshold get a ✦ suffix.
+- **Program BCCODE badge:** Shown in both the gallery card and the detail panel header.
 Every user action is logged to `audit_log` via `log_audit()` in `local_db.py`.
 Actions: `add`, `reactivate`, `remove`, `edit`, `assign`, `delete`.
 Viewable in the **Audit Log** tab (sidebar nav index 4).
@@ -149,6 +154,7 @@ Viewable in the **Audit Log** tab (sidebar nav index 4).
 - **Column typo:** Source DB has `ENTENDED_PRICE_NO_FUNDS` (not `EXTENDED_`).
 - **BILLTO table name:** The table is `dbo.BILLTO` (no underscore). `dbo.BILL_TO` gives "Invalid object name" error.
 - **BACCT# is numeric:** The `BACCT#` column is a numeric type. Must cast via `CAST(CAST([BACCT#] AS BIGINT) AS NVARCHAR(50))` — a plain `CAST([BACCT#] AS NVARCHAR)` would produce `50039.0` and not match string account numbers.
+- **\*CLSD\* accounts:** Source system marks closed accounts with `*CLSD*` at the start of BNAME. `sync_account_info()` automatically deactivates these. `init_db()` runs a one-time migration to deactivate any already-cached closed accounts on startup.
 - **OPENPO_H join:** Table is `dbo.OPENPO_H`. Join key is `_ORDERS.[ORDER#] = OPENPO_H.[H@REF#]`. Field `H@WARE` = `'DIR'` means direct ship (excluded from rebate-eligible sales).
 - **BACCT# field:** BILL_TO account number column is `BACCT#` — must be quoted as `[BACCT#]` in T-SQL. Old default was wrong (`BACCT`); migration in `init_db()` fixes live DBs.
 - **QThread.start() shadowing:** Never use `self.start = value` inside a QThread subclass — it overwrites the `start()` method. Use `self._start`.

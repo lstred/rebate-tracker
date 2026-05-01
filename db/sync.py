@@ -256,7 +256,12 @@ def sync_account_info(account_numbers: list[str], progress_cb=None) -> int:
                 continue
             acct = session.query(Account).filter_by(account_number=acct_no).first()
             if acct:
-                acct.account_name = _clean(row.get("account_name"))
+                name = _clean(row.get("account_name"))
+                # Automatically deactivate accounts the source system marks as closed
+                if name and name.upper().startswith("*CLSD*"):
+                    acct.is_active = False
+                    continue
+                acct.account_name = name
                 acct.address1 = _clean(row.get("address1"))
                 acct.address2 = _clean(row.get("address2"))
                 acct.city = _clean(row.get("city"))
