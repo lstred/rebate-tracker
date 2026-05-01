@@ -153,8 +153,8 @@ rebate tracking/
 - **Dark palette:** bg=`#0D1117`, surface=`#161B22`, accent=`#388BFD`, text=`#E6EDF3`, sidebar=`#0D1117`.
 - **Anti-pattern (AVOID):** Any code that f-strings `C` values at construction time with `setStyleSheet()` will NOT update on theme switch. Use `widget.setProperty("class", "classname")` and define the style in `_build_stylesheet()` QSS instead.
 - **QSS class selectors used:** `topbar`, `sidebar-widget`, `title-frame`, `left-panel`, `kpi-card`, `badge`, `vline-sep`, `hline-sep`, `card`, `card-flat`, `heading`, `subheading`, `muted`, `kpi-value`, `kpi-label`, `tag-success`, `tag-warning`, `tag-danger`, `primary`, `danger`, `success`, `nav`, `icon-btn`.
-- **TierProgressBar:** Uses `C["surface3"]`, `C["accent"]`, `C["success"]`, `C["text_dim"]`, `C["warning"]`, `C["text_muted"]` at paint time — safe for theme switching.
-- **Account gallery:** `setAlternatingRowColors(False)` — alternating row colors caused the system-palette AlternateBase (often white) to show through item widgets in dark mode.
+- **TierProgressBar:** Uses `C["surface3"]`, `C["accent"]`, `C["success"]`, `C["text_dim"]`, `C["warning"]`, `C["text_muted"]` at paint time — safe for theme switching. Now accepts `prior_year=0.0` param (4th positional after projected); draws a gray dashed vertical line on the bar at the prior year sales position. `build_legend(show_prior_year=True)` static method returns a compact QWidget legend strip (▓ Current, ▒ Projected, ┊ Prior Year, ◆ Year-End, │green Tier Reached, │gray Tier Pending).
+- **Rebate Structures assignments table:** 7 columns — Acct #, Account Name, Sales YTD, Projected, Prior Year, Rebate Est., Progress (mini TierProgressBar). Data loaded synchronously from SQLite in `_show_detail()`. Totals row at bottom sums active-account values. Inactive/CLSD accounts hidden by default with show-closed toggle; closed rows dimmed at 50% alpha. `_current_rebate_year_start()` helper duplicated at module level (same as accounts_view.py). `_show_detail()` stores `self._current_struct_id` for toggle re-render.
 
 ---
 
@@ -194,7 +194,7 @@ rebate tracking/
 - **Gallery panel** (left, 320 px): Custom `AccountGalleryItem` widgets — account number, program BCCODE badge, days-to-renewal countdown, account name, start date, mini `TierProgressBar`.
 - **Sort order:** Accounts sorted by days until next rebate-year anniversary (soonest renewals at top). Users can follow up before the new year starts.
 - **Renewal countdown colours:** ≤ 30 d = red, ≤ 60 d = amber, else muted.
-- **TierProgressBar:** Custom `QWidget` used both in the detail panel (full, with labels) and the gallery (mini, 9 px). Merges tiers sharing the same threshold into one boundary marker. Amber diamond ◆ shows straight-line projected year-end position. Green tick = threshold crossed, gray tick = not yet reached. Freight-only tiers at the same threshold get a ✦ suffix.
+- **TierProgressBar:** Custom `QWidget` used in the detail panel (full, with labels + legend), the gallery (mini, 9 px), and the assignments table (mini per row). Merges tiers sharing the same threshold into one boundary marker. Amber diamond ◆ shows straight-line projected year-end position. Gray dashed line shows prior year sales as a reference. Green tick = threshold crossed, gray tick = not yet reached. Freight-only tiers at the same threshold get a ✦ suffix. `build_legend()` static method returns a standalone legend QWidget placed below the bar.
 - **Program BCCODE badge:** Shown in both the gallery card and the detail panel header.
 Every user action is logged to `audit_log` via `log_audit()` in `local_db.py`.
 Actions: `add`, `reactivate`, `remove`, `edit`, `assign`, `delete`.

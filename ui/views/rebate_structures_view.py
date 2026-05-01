@@ -19,6 +19,7 @@ Each tier has:
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from typing import Optional
 
 from PyQt6.QtCore import Qt
@@ -55,7 +56,26 @@ from db.local_db import (
     RebateStructure,
     get_session,
 )
+from services.rebate_calculator import (
+    calculate_account_rebate,
+    get_period_sales,
+)
 from ui.theme import C
+from ui.views.accounts_view import TierProgressBar
+
+
+def _current_rebate_year_start(start_date: date, reference: date) -> date:
+    """Most recent anniversary of start_date that is <= reference."""
+    try:
+        candidate = start_date.replace(year=reference.year)
+    except ValueError:
+        candidate = date(reference.year, 3, 1)
+    if candidate <= reference:
+        return candidate
+    try:
+        return start_date.replace(year=reference.year - 1)
+    except ValueError:
+        return date(reference.year - 1, 3, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -557,13 +577,26 @@ class RebateStructuresView(QWidget):
         asgn_hdr.addWidget(self.chk_show_closed_asgn)
         right_layout.addLayout(asgn_hdr)
 
-        self.assign_tbl = QTableWidget(0, 3)
-        self.assign_tbl.setHorizontalHeaderLabels(["Account #", "Account Name", "Effective Date"])
-        self.assign_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.assign_tbl = QTableWidget(0, 7)
+        self.assign_tbl.setHorizontalHeaderLabels(
+            ["Acct #", "Account Name", "Sales YTD", "Projected", "Prior Year", "Rebate Est.", "Progress"]
+        )
+        hdr = self.assign_tbl.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         self.assign_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.assign_tbl.setAlternatingRowColors(True)
         self.assign_tbl.verticalHeader().setVisible(False)
+        self.assign_tbl.verticalHeader().setDefaultSectionSize(28)
         self.assign_tbl.setMinimumHeight(140)
+        # Bar legend sits between header and table
+        self._bar_legend = TierProgressBar.build_legend(show_prior_year=True)
+        right_layout.addWidget(self._bar_legend)
         right_layout.addWidget(self.assign_tbl, stretch=1)
 
         right_layout.addStretch()
@@ -662,39 +695,122 @@ class RebateStructuresView(QWidget):
                 tier_tbl.setItem(i, 3, QTableWidgetItem(mode_str))
             self.detail_layout.addWidget(tier_tbl)
 
-        # Assignments table
-        self.assign_tbl.setRowCount(0)
+        # ── Assignments table ───────────────────────────────────────────────
+        today = date.today()
+        tiers_raw = struct.get_tiers()
+
+        # Compute per-account sales data
+        row_data: list[dict] = []
         for asgn in assignments:
             acct = acct_map.get(asgn.account_number)
             is_closed = acct is not None and not acct.is_active
-            # Skip closed accounts unless the toggle is on
             if is_closed and not show_closed:
                 continue
-            row = self.assign_tbl.rowCount()
-            self.assign_tbl.insertRow(row)
-            self.assign_tbl.setItem(row, 0, QTableWidgetItem(asgn.account_number))
+
+            sales_ytd = projected = prior_yr = rebate_est = 0.0
+            if acct and acct.is_active and acct.start_date:
+                try:
+                    ry_start = _current_rebate_year_start(acct.start_date, today)
+                    sales_ytd = get_period_sales(acct.account_number, ry_start, today)
+                    elapsed = max(1, (today - ry_start).days)
+                    try:
+                        fy_end = ry_start.replace(year=ry_start.year + 1)
+                    except ValueError:
+                        fy_end = date(ry_start.year + 1, 3, 1)
+                    full_days = max(1, (fy_end - ry_start).days)
+                    projected = sales_ytd * full_days / elapsed
+                    try:
+                        py_start = ry_start.replace(year=ry_start.year - 1)
+                        py_end = today.replace(year=today.year - 1)
+                    except ValueError:
+                        py_start = ry_start - timedelta(days=365)
+                        py_end = today - timedelta(days=365)
+                    prior_yr = get_period_sales(acct.account_number, py_start, py_end)
+                    rr = calculate_account_rebate(acct, struct, today)
+                    rebate_est = rr.rebate_amount if rr else 0.0
+                except Exception:
+                    pass
+
             name = ""
             if acct:
                 name = acct.account_name or ""
                 if is_closed and not name.upper().startswith("*CLSD*"):
                     name = f"*CLSD* {name}"
-            self.assign_tbl.setItem(row, 1, QTableWidgetItem(name))
-            if asgn.effective_date:
-                eff = asgn.effective_date.strftime("%m/%d/%Y")
-            elif acct and acct.start_date:
-                eff = acct.start_date.strftime("%m/%d/%Y")
-            else:
-                eff = "—"
-            self.assign_tbl.setItem(row, 2, QTableWidgetItem(eff))
+
+            row_data.append({
+                "acct_no": asgn.account_number,
+                "name": name,
+                "sales_ytd": sales_ytd,
+                "projected": projected,
+                "prior_yr": prior_yr,
+                "rebate_est": rebate_est,
+                "is_closed": is_closed,
+            })
+
+        # Totals
+        tot_ytd    = sum(r["sales_ytd"]   for r in row_data if not r["is_closed"])
+        tot_proj   = sum(r["projected"]   for r in row_data if not r["is_closed"])
+        tot_prior  = sum(r["prior_yr"]    for r in row_data if not r["is_closed"])
+        tot_rebate = sum(r["rebate_est"]  for r in row_data if not r["is_closed"])
+
+        # Populate table
+        self.assign_tbl.setRowCount(0)
+
+        def _money(v: float) -> str:
+            if v == 0.0:
+                return "—"
+            if abs(v) >= 1_000_000:
+                return f"${v/1_000_000:.2f}M"
+            if abs(v) >= 1_000:
+                return f"${v/1_000:.1f}K"
+            return f"${v:,.0f}"
+
+        def _ra(text: str, bold: bool = False) -> QTableWidgetItem:
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            if bold:
+                item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            return item
+
+        for rd in row_data:
+            row = self.assign_tbl.rowCount()
+            self.assign_tbl.insertRow(row)
+            self.assign_tbl.setItem(row, 0, QTableWidgetItem(rd["acct_no"]))
+            self.assign_tbl.setItem(row, 1, QTableWidgetItem(rd["name"]))
+            self.assign_tbl.setItem(row, 2, _ra(_money(rd["sales_ytd"])))
+            self.assign_tbl.setItem(row, 3, _ra(_money(rd["projected"])))
+            self.assign_tbl.setItem(row, 4, _ra(_money(rd["prior_yr"])))
+            self.assign_tbl.setItem(row, 5, _ra(_money(rd["rebate_est"])))
+            # Mini progress bar
+            if tiers_raw and not rd["is_closed"]:
+                bar = TierProgressBar(
+                    tiers_raw,
+                    rd["sales_ytd"],
+                    rd["projected"],
+                    prior_year=rd["prior_yr"],
+                    mini=True,
+                )
+                self.assign_tbl.setCellWidget(row, 6, bar)
             # Dim closed rows
-            if is_closed:
-                from PyQt6.QtGui import QColor
+            if rd["is_closed"]:
                 dim = QColor(C["text_muted"])
                 dim.setAlphaF(0.5)
-                for col in range(3):
-                    item = self.assign_tbl.item(row, col)
-                    if item:
-                        item.setForeground(dim)
+                for col in range(7):
+                    it = self.assign_tbl.item(row, col)
+                    if it:
+                        it.setForeground(dim)
+
+        # Totals row
+        if row_data:
+            row = self.assign_tbl.rowCount()
+            self.assign_tbl.insertRow(row)
+            tot_lbl = QTableWidgetItem("Totals")
+            tot_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            self.assign_tbl.setItem(row, 0, tot_lbl)
+            self.assign_tbl.setItem(row, 2, _ra(_money(tot_ytd), bold=True))
+            self.assign_tbl.setItem(row, 3, _ra(_money(tot_proj), bold=True))
+            self.assign_tbl.setItem(row, 4, _ra(_money(tot_prior), bold=True))
+            self.assign_tbl.setItem(row, 5, _ra(_money(tot_rebate), bold=True))
 
     @staticmethod
     def _kv_label(key: str, value: str) -> QLabel:

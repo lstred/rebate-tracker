@@ -17,7 +17,7 @@ Add flow
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QDate, QThread, pyqtSignal, QPointF, QSize
@@ -148,6 +148,7 @@ class TierProgressBar(QWidget):
         tiers: list[dict],
         current: float,
         projected: float = 0.0,
+        prior_year: float = 0.0,
         mini: bool = False,
         parent=None,
     ):
@@ -157,7 +158,8 @@ class TierProgressBar(QWidget):
         self._max = 1.0
         self._current = 0.0
         self._projected = 0.0
-        self.set_data(tiers, current, projected)
+        self._prior_year = 0.0
+        self.set_data(tiers, current, projected, prior_year)
 
         if mini:
             self.setFixedHeight(self._MINI_H)
@@ -167,9 +169,10 @@ class TierProgressBar(QWidget):
             self.setMinimumWidth(200)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-    def set_data(self, tiers: list[dict], current: float, projected: float):
+    def set_data(self, tiers: list[dict], current: float, projected: float, prior_year: float = 0.0):
         self._current = max(current, 0.0)
         self._projected = max(projected, self._current)
+        self._prior_year = max(prior_year, 0.0)
 
         seen: dict[float, set] = {}
         for t in tiers:
@@ -178,7 +181,13 @@ class TierProgressBar(QWidget):
         self._segments = sorted(seen.items())
 
         raw_max = self._segments[-1][0] if self._segments else max(self._current, 1.0)
-        self._max = max(raw_max * 1.10, self._projected * 1.05, self._current * 1.10, 1.0)
+        self._max = max(
+            raw_max * 1.10,
+            self._projected * 1.05,
+            self._current * 1.10,
+            self._prior_year * 1.05,
+            1.0,
+        )
         self.update()
 
     def paintEvent(self, event):  # noqa: N802
@@ -210,6 +219,18 @@ class TierProgressBar(QWidget):
         if fill_x > 0:
             painter.setBrush(QColor(C.get("accent", "#3b7dd8")))
             painter.drawRoundedRect(0, bar_y, fill_x, bar_h, 3, 3)
+
+        # Prior year reference line — gray dashed vertical marker
+        if self._prior_year > 0:
+            py_x = int(W * frac(self._prior_year))
+            if 1 < py_x < W - 1:
+                py_col = QColor(C.get("text_dim", "#4a5568"))
+                py_col.setAlpha(200)
+                py_pen = QPen(py_col, 1 if self._mini else 2)
+                if not self._mini:
+                    py_pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(py_pen)
+                painter.drawLine(py_x, bar_y, py_x, bar_y + bar_h)
 
         # Tier boundary ticks
         for th, types in self._segments:
@@ -263,6 +284,33 @@ class TierProgressBar(QWidget):
                 painter.drawText(lx, lbl_y, lbl)
 
         painter.end()
+
+    @staticmethod
+    def build_legend(show_prior_year: bool = True) -> "QWidget":
+        """Compact horizontal legend strip explaining bar colours and markers."""
+        container = QWidget()
+        lay = QHBoxLayout(container)
+        lay.setContentsMargins(0, 3, 0, 3)
+        lay.setSpacing(4)
+
+        def add(marker: str, style: str, label: str, gap: int = 10):
+            m = QLabel(marker)
+            m.setStyleSheet(style)
+            lay.addWidget(m)
+            t = QLabel(label)
+            t.setStyleSheet(f"color:{C['text_muted']}; font-size:9px;")
+            lay.addWidget(t)
+            lay.addSpacing(gap)
+
+        add("█", f"color:{C['accent']}; font-size:11px;", "Current Sales")
+        add("▒", f"color:{C['accent']}; font-size:11px;", "Projected")
+        if show_prior_year:
+            add("┆", f"color:{C.get('text_dim','#4a5568')}; font-size:12px;", "Prior Year")
+        add("◆", f"color:{C['warning']}; font-size:10px;", "Year-End Est.")
+        add("│", f"color:{C['success']}; font-size:13px; font-weight:bold;", "Tier Reached")
+        add("│", f"color:{C.get('text_dim','#4a5568')}; font-size:13px;", "Tier Pending")
+        lay.addStretch()
+        return container
 
 
 # ---------------------------------------------------------------------------
@@ -347,10 +395,10 @@ class AccountGalleryItem(QWidget):
         self._mini_bar = TierProgressBar([], 0.0, 0.0, mini=True)
         layout.addWidget(self._mini_bar)
 
-    def update_tier_data(self, tiers: list[dict], current: float, projected: float):
+    def update_tier_data(self, tiers: list[dict], current: float, projected: float, prior_year: float = 0.0):
         """Update the mini bar once background loading has the real data."""
         if self._mini_bar:
-            self._mini_bar.set_data(tiers, current, projected)
+            self._mini_bar.set_data(tiers, current, projected, prior_year)
 
 
 # ---------------------------------------------------------------------------
@@ -406,13 +454,23 @@ class GalleryLoader(QThread):
                 full_days = max(1, (fy_end - ry_start).days)
                 projected = current * full_days / elapsed
 
+                # Prior year: same elapsed window shifted back one year
+                try:
+                    py_start = ry_start.replace(year=ry_start.year - 1)
+                    py_end = today.replace(year=today.year - 1)
+                except ValueError:
+                    py_start = ry_start - timedelta(days=365)
+                    py_end = today - timedelta(days=365)
+                prior_year = get_period_sales(acct.account_number, py_start, py_end)
+
                 result[acct.account_number] = {
                     "tiers": tiers,
                     "current": current,
                     "projected": projected,
+                    "prior_year": prior_year,
                 }
             except Exception:
-                result[acct.account_number] = {"tiers": [], "current": 0.0, "projected": 0.0}
+                result[acct.account_number] = {"tiers": [], "current": 0.0, "projected": 0.0, "prior_year": 0.0}
 
         self.ready.emit(result)
 
@@ -921,15 +979,18 @@ class AccountDetailPanel(QWidget):
                 prog_label = QLabel(
                     f"{'Growth' if is_growth else 'Sales'}"
                     f"  ·  <b>${eval_sales:,.0f}</b> current"
-                    f"  ·  <b>${projected:,.0f}</b> projected year-end"
+                    f"  ·  <b>${projected:,.0f}</b> projected"
+                    f"  ·  <b>${d['prior_sales']:,.0f}</b> prior year"
                     f"  ·  max tier ${max_threshold:,.0f}"
                 )
                 prog_label.setTextFormat(Qt.TextFormat.RichText)
                 prog_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
                 rebate_layout.addWidget(prog_label)
 
-                tier_bar = TierProgressBar(tiers_raw, eval_sales, projected)
+                prior_yr_sales = d["prior_sales"] if not is_growth else 0.0
+                tier_bar = TierProgressBar(tiers_raw, eval_sales, projected, prior_year=prior_yr_sales)
                 rebate_layout.addWidget(tier_bar)
+                rebate_layout.addWidget(TierProgressBar.build_legend(show_prior_year=not is_growth))
 
         self._layout.addWidget(rebate_frame)
 
@@ -1599,7 +1660,7 @@ class AccountsView(QWidget):
                 acct_no = item.data(Qt.ItemDataRole.UserRole)
                 if acct_no in data:
                     d = data[acct_no]
-                    widget.update_tier_data(d["tiers"], d["current"], d["projected"])
+                    widget.update_tier_data(d["tiers"], d["current"], d["projected"], d.get("prior_year", 0.0))
 
     def _filter_list(self, text: str):
         text = text.lower()
