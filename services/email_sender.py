@@ -46,6 +46,7 @@ def get_smtp_settings() -> dict:
         "user":      get_setting("smtp_user", ""),
         "password":  get_setting("smtp_password", ""),
         "from_name": get_setting("smtp_from_name", ""),
+        "reply_to":  get_setting("smtp_reply_to", ""),
     }
 
 
@@ -98,6 +99,8 @@ def send_statement_email(
     msg["From"]    = display_from
     msg["To"]      = f"{to_name} <{to_email}>" if to_name else to_email
     msg["Subject"] = subject
+    if cfg.get("reply_to"):
+        msg["Reply-To"] = cfg["reply_to"]
 
     # HTML body
     alt = MIMEMultipart("alternative")

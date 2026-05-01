@@ -344,9 +344,12 @@ def sync_marketing_program(bccode: str, program_id: int, progress_cb=None) -> tu
                 session.add(new_acct)
                 added += 1
             else:
-                # Re-activate if they returned to the program
-                if not existing_map[acct_no].is_active:
-                    existing_map[acct_no].is_active = True
+                # Re-activate if they returned to the program,
+                # but never re-activate accounts the source system has marked closed
+                acct_obj = existing_map[acct_no]
+                name = acct_obj.account_name or ""
+                if not acct_obj.is_active and not name.upper().startswith("*CLSD*"):
+                    acct_obj.is_active = True
 
         # Deactivate members who left the program
         for acct_no, acct in existing_map.items():

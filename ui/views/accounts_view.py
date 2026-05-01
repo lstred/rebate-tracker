@@ -32,6 +32,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
@@ -275,11 +276,19 @@ class AccountGalleryItem(QWidget):
     start date, and a mini segmented tier progress bar.
     """
 
-    def __init__(self, account: Account, program_bccode: str = "", parent=None):
+    def __init__(self, account: Account, program_bccode: str = "", closed: bool = False, parent=None):
         super().__init__(parent)
         self._account = account
         self._mini_bar: Optional[TierProgressBar] = None
+        self._closed = closed
         self._build(program_bccode)
+        if closed:
+            self.setEnabled(False)
+            self.setToolTip("Closed account (*CLSD*)")
+            from PyQt6.QtWidgets import QGraphicsOpacityEffect
+            op = QGraphicsOpacityEffect(self)
+            op.setOpacity(0.45)
+            self.setGraphicsEffect(op)
 
     def _build(self, program_bccode: str):
         layout = QVBoxLayout(self)
@@ -1505,6 +1514,13 @@ class AccountsView(QWidget):
         self.search_box.textChanged.connect(self._filter_list)
         left_layout.addWidget(self.search_box)
 
+        # Show closed accounts toggle
+        self.chk_show_closed = QCheckBox("Show closed accounts")
+        self.chk_show_closed.setChecked(False)
+        self.chk_show_closed.setProperty("class", "muted")
+        self.chk_show_closed.toggled.connect(self._on_show_closed_toggled)
+        left_layout.addWidget(self.chk_show_closed)
+
         # Account list
         self.account_list = QListWidget()
         self.account_list.setAlternatingRowColors(False)
@@ -1524,10 +1540,22 @@ class AccountsView(QWidget):
         root.addWidget(self.detail_panel)
 
     def _load_accounts(self):
+        show_closed = getattr(self, "chk_show_closed", None) and self.chk_show_closed.isChecked()
         with get_session() as session:
-            accounts = (
-                session.query(Account).filter_by(is_active=True).all()
-            )
+            if show_closed:
+                # Active accounts + CLSD-marked inactive accounts
+                active = session.query(Account).filter_by(is_active=True).all()
+                closed = (
+                    session.query(Account)
+                    .filter(
+                        Account.is_active == False,
+                        Account.account_name.ilike("*CLSD*%"),
+                    )
+                    .all()
+                )
+                accounts = active + closed
+            else:
+                accounts = session.query(Account).filter_by(is_active=True).all()
             programs = {p.id: p.bccode or "" for p in session.query(MarketingProgram).all()}
 
         # Build program lookup: account_number -> bccode
@@ -1540,15 +1568,19 @@ class AccountsView(QWidget):
         self._accounts = sorted(accounts, key=lambda a: _days_to_next_anniversary(a.start_date))
         self._populate_list(self._accounts)
 
+    def _on_show_closed_toggled(self, checked: bool):
+        self._load_accounts()
+
     def _populate_list(self, accounts: list):
         self.account_list.clear()
         program_map = getattr(self, "_program_map", {})
         for acct in accounts:
             bccode = program_map.get(acct.account_number, "")
+            is_closed = not acct.is_active
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, acct.account_number)
             item.setSizeHint(QSize(0, 74))
-            widget = AccountGalleryItem(acct, bccode)
+            widget = AccountGalleryItem(acct, bccode, closed=is_closed)
             self.account_list.addItem(item)
             self.account_list.setItemWidget(item, widget)
         # Kick off background loader to fill mini progress bars

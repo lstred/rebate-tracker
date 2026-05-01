@@ -555,8 +555,8 @@ class RebateStructuresView(QWidget):
         self.assign_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.assign_tbl.setAlternatingRowColors(True)
         self.assign_tbl.verticalHeader().setVisible(False)
-        self.assign_tbl.setMaximumHeight(200)
-        right_layout.addWidget(self.assign_tbl)
+        self.assign_tbl.setMinimumHeight(140)
+        right_layout.addWidget(self.assign_tbl, stretch=1)
 
         right_layout.addStretch()
         root.addWidget(right)
@@ -655,7 +655,12 @@ class RebateStructuresView(QWidget):
             self.assign_tbl.setItem(row, 1, QTableWidgetItem(
                 acct.account_name or "" if acct else ""
             ))
-            eff = asgn.effective_date.strftime("%m/%d/%Y") if asgn.effective_date else "—"
+            if asgn.effective_date:
+                eff = asgn.effective_date.strftime("%m/%d/%Y")
+            elif acct and acct.start_date:
+                eff = acct.start_date.strftime("%m/%d/%Y")
+            else:
+                eff = "—"
             self.assign_tbl.setItem(row, 2, QTableWidgetItem(eff))
 
     @staticmethod

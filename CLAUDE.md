@@ -118,6 +118,7 @@ rebate tracking/
 | `smtp_user` | `""` | Sender email address / login |
 | `smtp_password` | `""` | Password or App Password (never hardcoded) |
 | `smtp_from_name` | `""` | Display name in From header |
+| `smtp_reply_to` | `""` | Reply-To address (optional; defaults to smtp_user if blank) |
 | `theme` | `dark` | Active UI theme (`dark` or `light`) |
 | `last_export_dir` | `""` | Last PDF export folder (shared between Generate and Email sections) |
 
@@ -206,7 +207,7 @@ Viewable in the **Audit Log** tab (sidebar nav index 4).
 - **Column typo:** Source DB has `ENTENDED_PRICE_NO_FUNDS` (not `EXTENDED_`).
 - **BILLTO table name:** The table is `dbo.BILLTO` (no underscore). `dbo.BILL_TO` gives "Invalid object name" error.
 - **BACCT# is numeric:** The `BACCT#` column is a numeric type. Must cast via `CAST(CAST([BACCT#] AS BIGINT) AS NVARCHAR(50))` — a plain `CAST([BACCT#] AS NVARCHAR)` would produce `50039.0` and not match string account numbers.
-- **\*CLSD\* accounts:** Source system marks closed accounts with `*CLSD*` at the start of BNAME. `sync_account_info()` automatically deactivates these. `init_db()` runs a one-time migration to deactivate any already-cached closed accounts on startup.
+- **\*CLSD\* accounts:** Source system marks closed accounts with `*CLSD*` at the start of BNAME. `sync_account_info()` automatically deactivates these. `init_db()` runs a one-time migration to deactivate any already-cached closed accounts on startup. `sync_marketing_program()` guards re-activation: if an account's `account_name` starts with `*CLSD*`, it is never re-activated even if it appears in the program roster again. Accounts view has a **Show closed accounts** checkbox that loads `is_active=False` accounts with `*CLSD*` prefix alongside active ones; closed cards are shown at 45% opacity and disabled.
 - **OPENPO_H join:** Table is `dbo.OPENPO_H`. Join key is `_ORDERS.[ORDER#] = OPENPO_H.[H@REF#]`. Field `H@WARE` = `'DIR'` means direct ship (excluded from rebate-eligible sales).
 - **BACCT# field:** BILL_TO account number column is `BACCT#` — must be quoted as `[BACCT#]` in T-SQL. Old default was wrong (`BACCT`); migration in `init_db()` fixes live DBs.
 - **QThread.start() shadowing:** Never use `self.start = value` inside a QThread subclass — it overwrites the `start()` method. Use `self._start`.

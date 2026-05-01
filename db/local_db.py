@@ -422,6 +422,7 @@ def init_db() -> None:
         _seed_setting(session, "smtp_user", "")
         _seed_setting(session, "smtp_password", "")  # entered via Settings UI
         _seed_setting(session, "smtp_from_name", "")
+        _seed_setting(session, "smtp_reply_to",  "")
         # UI theme
         _seed_setting(session, "theme", "dark")
 

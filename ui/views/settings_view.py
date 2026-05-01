@@ -179,6 +179,10 @@ class SettingsView(QWidget):
         self.smtp_from_name.setPlaceholderText("e.g. NRF Flooring")
         email_form.addRow("Display Name:", self.smtp_from_name)
 
+        self.smtp_reply_to = QLineEdit(get_setting("smtp_reply_to", ""))
+        self.smtp_reply_to.setPlaceholderText("reply@company.com  (optional — defaults to Email Address)")
+        email_form.addRow("Reply-To:", self.smtp_reply_to)
+
         email_layout.addLayout(email_form)
 
         email_btn_row = QHBoxLayout()
@@ -584,6 +588,7 @@ class SettingsView(QWidget):
         set_setting("smtp_user",      self.smtp_user.text().strip())
         set_setting("smtp_password",  self.smtp_password.text())
         set_setting("smtp_from_name", self.smtp_from_name.text().strip())
+        set_setting("smtp_reply_to",   self.smtp_reply_to.text().strip())
         self.email_status.setText("✓  Email settings saved.")
         self.email_status.setStyleSheet(f"color: {C['success']}; font-size: 11px;")
 
