@@ -82,13 +82,13 @@ rebate tracking/
 | `INVOICE_DATE_YYYYMMDD` | Integer in YYYYMMDD format |
 | `COST_CENTER` | Cost center (filter: `LIKE '0%'` for product sales) |
 
-### Account info: `dbo.BILL_TO`
+### Account info: `dbo.BILLTO` (no underscore — NOT `dbo.BILL_TO`)
 | Column | Notes |
 |---|---|
-| `BACCT#` | Account number (note the `#` — requires `[BACCT#]` in T-SQL) |
+| `BACCT#` | Account number — **numeric column**, must cast via `CAST(CAST([BACCT#] AS BIGINT) AS NVARCHAR)` to avoid `50039.0` formatting |
 | `BNAME` | Account/dealer name |
 | `BADDR1`, `BADDR2` | Address lines |
-| `BCITY`, `BSTATE`, `BZIP1`, `BZIP2` | City/state/zip |
+| `BCITY`, `BSTATE`, `BZIP1`, `BZIP2` | City/state/zip (BZIP1/BZIP2 are also numeric, cast to NVARCHAR) |
 | `BPHONB` | Phone (numeric, formatted to (XXX) XXX-XXXX) |
 
 ### App Settings for SQL Server fields
@@ -124,6 +124,8 @@ Viewable in the **Audit Log** tab (sidebar nav index 4).
 ## Known Historical Fixes
 - **PyQt6 MAX_PATH:** Install to `C:\rtenv` (short path) not default site-packages.
 - **Column typo:** Source DB has `ENTENDED_PRICE_NO_FUNDS` (not `EXTENDED_`).
+- **BILLTO table name:** The table is `dbo.BILLTO` (no underscore). `dbo.BILL_TO` gives "Invalid object name" error.
+- **BACCT# is numeric:** The `BACCT#` column is a numeric type. Must cast via `CAST(CAST([BACCT#] AS BIGINT) AS NVARCHAR(50))` — a plain `CAST([BACCT#] AS NVARCHAR)` would produce `50039.0` and not match string account numbers.
 - **BACCT# field:** BILL_TO account number column is `BACCT#` — must be quoted as `[BACCT#]` in T-SQL. Old default was wrong (`BACCT`); migration in `init_db()` fixes live DBs.
 - **QThread.start() shadowing:** Never use `self.start = value` inside a QThread subclass — it overwrites the `start()` method. Use `self._start`.
 - **Session detached objects:** Always capture data inside `with get_session()` before opening dialogs; open fresh sessions for writes.

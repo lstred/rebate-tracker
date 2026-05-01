@@ -95,19 +95,20 @@ def _sales_query(account_numbers: Optional[list[str]] = None) -> str:
 def _account_info_query(account_numbers: list[str]) -> str:
     bt_field = get_setting("bill_to_account_field", "BACCT#")
     quoted = ", ".join(f"'{a}'" for a in account_numbers)
+    # Use CAST to BIGINT first to avoid decimal formatting (column is numeric in source DB)
     return f"""
         SELECT
-            CAST([{bt_field}] AS NVARCHAR(50)) AS account_number,
+            CAST(CAST([{bt_field}] AS BIGINT) AS NVARCHAR(50)) AS account_number,
             BNAME   AS account_name,
             BADDR1  AS address1,
             BADDR2  AS address2,
             BCITY   AS city,
             BSTATE  AS state,
-            BZIP1   AS zip1,
-            BZIP2   AS zip2,
+            CAST(BZIP1 AS NVARCHAR(20))  AS zip1,
+            CAST(BZIP2 AS NVARCHAR(20))  AS zip2,
             CAST(BPHONB AS NVARCHAR(20)) AS phone_raw
-        FROM dbo.BILL_TO
-        WHERE CAST([{bt_field}] AS NVARCHAR) IN ({quoted})
+        FROM dbo.BILLTO
+        WHERE CAST(CAST([{bt_field}] AS BIGINT) AS NVARCHAR(50)) IN ({quoted})
     """
 
 
@@ -234,9 +235,9 @@ def sync_account_info(account_numbers: list[str], progress_cb=None) -> int:
 
     try:
         df = pd.read_sql(query, sql_engine)
-    except Exception:
-        # BILL_TO join key may be wrong — non-fatal; app still works
-        return 0
+    except Exception as exc:
+        # Re-raise so the caller can report the real error
+        raise RuntimeError(f"BILL_TO query failed: {exc}") from exc
 
     updated = 0
     with get_session() as session:
