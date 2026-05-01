@@ -542,12 +542,20 @@ class RebateStructuresView(QWidget):
         self.detail_layout.addWidget(self._lbl_select)
         right_layout.addWidget(self.detail_frame)
 
-        # Assignments table
+        # Assignments header row: label + show-closed toggle
+        asgn_hdr = QHBoxLayout()
         asgn_lbl = QLabel("Assignments")
         asgn_lbl.setStyleSheet(
             f"color:{C['text_muted']}; font-size:11px; font-weight:bold;"
         )
-        right_layout.addWidget(asgn_lbl)
+        asgn_hdr.addWidget(asgn_lbl)
+        asgn_hdr.addStretch()
+        self.chk_show_closed_asgn = QCheckBox("Show closed accounts")
+        self.chk_show_closed_asgn.setChecked(False)
+        self.chk_show_closed_asgn.setProperty("class", "muted")
+        self.chk_show_closed_asgn.toggled.connect(self._on_show_closed_asgn_toggled)
+        asgn_hdr.addWidget(self.chk_show_closed_asgn)
+        right_layout.addLayout(asgn_hdr)
 
         self.assign_tbl = QTableWidget(0, 3)
         self.assign_tbl.setHorizontalHeaderLabels(["Account #", "Account Name", "Effective Date"])
@@ -560,6 +568,11 @@ class RebateStructuresView(QWidget):
 
         right_layout.addStretch()
         root.addWidget(right)
+
+    def _on_show_closed_asgn_toggled(self, _checked: bool):
+        """Re-render the assignments table when the show-closed toggle changes."""
+        if hasattr(self, "_current_struct_id"):
+            self._show_detail(self._current_struct_id)
 
     @staticmethod
     def _make_sep() -> QFrame:
@@ -590,6 +603,11 @@ class RebateStructuresView(QWidget):
         self._show_detail(struct_id)
 
     def _show_detail(self, struct_id: int):
+        self._current_struct_id = struct_id
+        show_closed = (
+            hasattr(self, "chk_show_closed_asgn")
+            and self.chk_show_closed_asgn.isChecked()
+        )
         with get_session() as session:
             struct = session.query(RebateStructure).filter_by(id=struct_id).first()
             assignments = (
@@ -597,10 +615,9 @@ class RebateStructuresView(QWidget):
                 .filter_by(rebate_structure_id=struct_id)
                 .all()
             )
-            acct_map = {
-                a.account_number: a
-                for a in session.query(Account).filter_by(is_active=True).all()
-            }
+            # Load ALL accounts so we can look up names for inactive ones too
+            all_accounts = session.query(Account).all()
+            acct_map = {a.account_number: a for a in all_accounts}
 
         if not struct:
             return
@@ -648,13 +665,20 @@ class RebateStructuresView(QWidget):
         # Assignments table
         self.assign_tbl.setRowCount(0)
         for asgn in assignments:
+            acct = acct_map.get(asgn.account_number)
+            is_closed = acct is not None and not acct.is_active
+            # Skip closed accounts unless the toggle is on
+            if is_closed and not show_closed:
+                continue
             row = self.assign_tbl.rowCount()
             self.assign_tbl.insertRow(row)
-            acct = acct_map.get(asgn.account_number)
             self.assign_tbl.setItem(row, 0, QTableWidgetItem(asgn.account_number))
-            self.assign_tbl.setItem(row, 1, QTableWidgetItem(
-                acct.account_name or "" if acct else ""
-            ))
+            name = ""
+            if acct:
+                name = acct.account_name or ""
+                if is_closed and not name.upper().startswith("*CLSD*"):
+                    name = f"*CLSD* {name}"
+            self.assign_tbl.setItem(row, 1, QTableWidgetItem(name))
             if asgn.effective_date:
                 eff = asgn.effective_date.strftime("%m/%d/%Y")
             elif acct and acct.start_date:
@@ -662,6 +686,15 @@ class RebateStructuresView(QWidget):
             else:
                 eff = "—"
             self.assign_tbl.setItem(row, 2, QTableWidgetItem(eff))
+            # Dim closed rows
+            if is_closed:
+                from PyQt6.QtGui import QColor
+                dim = QColor(C["text_muted"])
+                dim.setAlphaF(0.5)
+                for col in range(3):
+                    item = self.assign_tbl.item(row, col)
+                    if item:
+                        item.setForeground(dim)
 
     @staticmethod
     def _kv_label(key: str, value: str) -> QLabel:
