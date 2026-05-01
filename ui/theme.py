@@ -424,30 +424,28 @@ QHeaderView::section:hover {{
 
 /* ── Tab widget ──────────────────────────────────────── */
 QTabWidget::pane {{
-    border: 1px solid {C["border"]};
-    border-top: none;
-    background: {C["surface"]};
-    border-radius: 0 0 8px 8px;
+    border: none;
+    border-top: 1px solid {C["border"]};
+    background: transparent;
 }}
 QTabBar::tab {{
-    background: {C["surface2"]};
+    background: transparent;
     color: {C["text_muted"]};
-    padding: 8px 20px;
-    border: 1px solid {C["border"]};
-    border-bottom: none;
-    border-radius: 6px 6px 0 0;
-    margin-right: 2px;
+    padding: 9px 22px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-right: 4px;
     font-size: 12px;
+    min-width: 100px;
 }}
 QTabBar::tab:selected {{
-    background: {C["surface"]};
-    color: {C["text"]};
+    color: {C["accent"]};
     border-bottom: 2px solid {C["accent"]};
     font-weight: bold;
 }}
 QTabBar::tab:hover:!selected {{
-    background: {C["surface3"]};
     color: {C["text"]};
+    border-bottom: 2px solid {C["border"]};
 }}
 
 /* ── List widget ─────────────────────────────────────── */

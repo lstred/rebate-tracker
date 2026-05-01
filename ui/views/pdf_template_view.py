@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -420,20 +421,32 @@ class PdfTemplateView(QWidget):
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(16)
+        root.setSpacing(12)
 
-        # Header
+        # ── Page heading ──────────────────────────────────────────────
         heading = QLabel("PDF Statement Templates")
         heading.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
         root.addWidget(heading)
 
-        desc = QLabel(
+        # ── Tab widget ────────────────────────────────────────────────
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs, stretch=1)
+
+        # ══════════════════════════════════════════════════════════════
+        # TAB 1 — Design
+        # ══════════════════════════════════════════════════════════════
+        design_page = QWidget()
+        d_layout = QVBoxLayout(design_page)
+        d_layout.setContentsMargins(0, 12, 0, 0)
+        d_layout.setSpacing(8)
+
+        design_desc = QLabel(
             "Customize the look of dealer rebate statements.  "
-            "Save your template then export PDFs for all active accounts."
+            "Save your template then export PDFs on the Generate tab."
         )
-        desc.setStyleSheet(f"color: {C['text_muted']};")
-        desc.setWordWrap(True)
-        root.addWidget(desc)
+        design_desc.setProperty("class", "muted")
+        design_desc.setWordWrap(True)
+        d_layout.addWidget(design_desc)
 
         # Splitter: template list | editor
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -477,7 +490,7 @@ class PdfTemplateView(QWidget):
         self._editor_layout.setContentsMargins(0, 0, 0, 0)
         placeholder = QLabel("Select a template to edit.")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet(f"color: {C['text_muted']};")
+        placeholder.setProperty("class", "muted")
         self._editor_layout.addWidget(placeholder)
         self._current_editor: Optional[TemplateEditorPanel] = None
 
@@ -494,87 +507,120 @@ class PdfTemplateView(QWidget):
         right_layout.addLayout(save_row)
 
         splitter.addWidget(right)
-        root.addWidget(splitter, stretch=1)
+        d_layout.addWidget(splitter, stretch=1)
 
-        # ── Export section ────────────────────────────────────────────
+        self.tabs.addTab(design_page, "Design")
+
+        # ══════════════════════════════════════════════════════════════
+        # TAB 2 — Generate PDFs
+        # ══════════════════════════════════════════════════════════════
+        generate_page = QWidget()
+        g_layout = QVBoxLayout(generate_page)
+        g_layout.setContentsMargins(0, 12, 0, 0)
+        g_layout.setSpacing(0)
+
         export_frame = QFrame()
         export_frame.setProperty("class", "card")
         export_outer = QVBoxLayout(export_frame)
-        export_outer.setContentsMargins(16, 12, 16, 12)
-        export_outer.setSpacing(10)
+        export_outer.setContentsMargins(24, 20, 24, 20)
+        export_outer.setSpacing(14)
 
-        export_heading = QLabel("Generate PDF Statements")
-        export_heading.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        export_outer.addWidget(export_heading)
+        gen_heading = QLabel("Generate PDF Statements")
+        gen_heading.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        export_outer.addWidget(gen_heading)
 
-        # Folder selector (shared across modes)
+        gen_desc = QLabel(
+            "Choose an output folder, then generate statements for a single account, "
+            "a marketing program group, or all active accounts at once."
+        )
+        gen_desc.setProperty("class", "muted")
+        gen_desc.setWordWrap(True)
+        export_outer.addWidget(gen_desc)
+
+        # Folder selector
         folder_row = QHBoxLayout()
         folder_row.setSpacing(8)
         folder_lbl_prefix = QLabel("Output folder:")
-        folder_lbl_prefix.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        folder_lbl_prefix.setProperty("class", "muted")
         folder_row.addWidget(folder_lbl_prefix)
         self.lbl_export_dir = QLabel("No folder selected")
-        self.lbl_export_dir.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        self.lbl_export_dir.setProperty("class", "muted")
         folder_row.addWidget(self.lbl_export_dir, stretch=1)
         btn_dir = QPushButton("Choose Folder")
         btn_dir.clicked.connect(self._choose_export_dir)
         folder_row.addWidget(btn_dir)
         export_outer.addLayout(folder_row)
 
-        # Three export buttons in a row
+        # Horizontal rule
+        h_sep = QFrame()
+        h_sep.setFrameShape(QFrame.Shape.HLine)
+        h_sep.setProperty("class", "hline-sep")
+        export_outer.addWidget(h_sep)
+
+        # Three export columns
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
+        btn_row.setSpacing(24)
 
         # Single account
         single_col = QVBoxLayout()
-        single_col.setSpacing(4)
+        single_col.setSpacing(6)
         single_label = QLabel("Single Account")
-        single_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        single_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         single_col.addWidget(single_label)
+        single_hint = QLabel("Generate for one dealer")
+        single_hint.setProperty("class", "muted")
+        single_col.addWidget(single_hint)
         self.single_acct_combo = QComboBox()
-        self.single_acct_combo.setMinimumWidth(200)
+        self.single_acct_combo.setMinimumWidth(220)
         single_col.addWidget(self.single_acct_combo)
         self.btn_export_single = QPushButton("⬇  Generate Statement")
         self.btn_export_single.setProperty("class", "primary")
         self.btn_export_single.setEnabled(False)
         self.btn_export_single.clicked.connect(self._export_single)
         single_col.addWidget(self.btn_export_single)
-        btn_row.addLayout(single_col)
+        single_col.addStretch()
+        btn_row.addLayout(single_col, stretch=1)
 
-        # Vertical separator
         vsep = QFrame()
         vsep.setFrameShape(QFrame.Shape.VLine)
-        vsep.setStyleSheet(f"color: {C['border']};")
+        vsep.setProperty("class", "vline-sep")
         btn_row.addWidget(vsep)
 
         # Marketing program group
         group_col = QVBoxLayout()
-        group_col.setSpacing(4)
+        group_col.setSpacing(6)
         group_label = QLabel("By Marketing Program")
-        group_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        group_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         group_col.addWidget(group_label)
+        group_hint = QLabel("Generate for a program group")
+        group_hint.setProperty("class", "muted")
+        group_col.addWidget(group_hint)
         self.group_combo = QComboBox()
-        self.group_combo.setMinimumWidth(200)
+        self.group_combo.setMinimumWidth(220)
         group_col.addWidget(self.group_combo)
         self.btn_export_group = QPushButton("⬇  Generate for Group")
         self.btn_export_group.setProperty("class", "primary")
         self.btn_export_group.setEnabled(False)
         self.btn_export_group.clicked.connect(self._export_group)
         group_col.addWidget(self.btn_export_group)
-        btn_row.addLayout(group_col)
+        group_col.addStretch()
+        btn_row.addLayout(group_col, stretch=1)
 
         vsep2 = QFrame()
         vsep2.setFrameShape(QFrame.Shape.VLine)
-        vsep2.setStyleSheet(f"color: {C['border']};")
+        vsep2.setProperty("class", "vline-sep")
         btn_row.addWidget(vsep2)
 
         # Batch all
         batch_col = QVBoxLayout()
-        batch_col.setSpacing(4)
+        batch_col.setSpacing(6)
         batch_label = QLabel("All Active Accounts")
-        batch_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 10px;")
+        batch_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         batch_col.addWidget(batch_label)
-        batch_spacer = QLabel("")   # align vertically with combos
+        batch_hint = QLabel("Export statements for every dealer")
+        batch_hint.setProperty("class", "muted")
+        batch_col.addWidget(batch_hint)
+        batch_spacer = QWidget()
         batch_spacer.setFixedHeight(self.single_acct_combo.sizeHint().height())
         batch_col.addWidget(batch_spacer)
         self.btn_export = QPushButton("⬇  Export All PDFs")
@@ -582,113 +628,121 @@ class PdfTemplateView(QWidget):
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_all)
         batch_col.addWidget(self.btn_export)
-        btn_row.addLayout(batch_col)
+        batch_col.addStretch()
+        btn_row.addLayout(batch_col, stretch=1)
 
-        btn_row.addStretch()
         export_outer.addLayout(btn_row)
 
         # Progress bar (hidden when idle)
         self.export_progress = QProgressBar()
         self.export_progress.setVisible(False)
         self.export_status = QLabel("")
-        self.export_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        self.export_status.setProperty("class", "muted")
         prog_row = QHBoxLayout()
         prog_row.addWidget(self.export_progress)
         prog_row.addWidget(self.export_status)
         export_outer.addLayout(prog_row)
 
-        root.addWidget(export_frame)
+        g_layout.addWidget(export_frame)
+        g_layout.addStretch()
+        self.tabs.addTab(generate_page, "Generate PDFs")
 
-        # ── Email Statements section ──────────────────────────────────
+        # ══════════════════════════════════════════════════════════════
+        # TAB 3 — Email Statements
+        # ══════════════════════════════════════════════════════════════
+        email_page = QWidget()
+        e_layout = QVBoxLayout(email_page)
+        e_layout.setContentsMargins(0, 12, 0, 0)
+        e_layout.setSpacing(0)
+
         email_frame = QFrame()
         email_frame.setProperty("class", "card")
         email_outer = QVBoxLayout(email_frame)
-        email_outer.setContentsMargins(16, 12, 16, 12)
+        email_outer.setContentsMargins(24, 20, 24, 16)
         email_outer.setSpacing(10)
 
+        # Heading row: title | group filter | refresh
         email_heading_row = QHBoxLayout()
         email_heading_lbl = QLabel("Email Statements to Dealers")
-        email_heading_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        email_heading_lbl.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         email_heading_row.addWidget(email_heading_lbl)
         email_heading_row.addStretch()
-
+        filter_lbl = QLabel("Group:")
+        filter_lbl.setProperty("class", "muted")
+        email_heading_row.addWidget(filter_lbl)
+        self.email_group_filter = QComboBox()
+        self.email_group_filter.setFixedWidth(200)
+        self.email_group_filter.currentIndexChanged.connect(self._load_email_table)
+        email_heading_row.addWidget(self.email_group_filter)
+        email_heading_row.addSpacing(8)
         btn_reload_email = QPushButton("⟳ Refresh List")
         btn_reload_email.clicked.connect(self._load_email_table)
         email_heading_row.addWidget(btn_reload_email)
         email_outer.addLayout(email_heading_row)
 
         email_desc = QLabel(
-            "Select an output folder (PDFs are generated on demand), then use the buttons "
-            "below to preview a statement or send it directly to the dealer's email address. "
-            "Accounts without an email address are shown but the Send button is disabled. "
-            "Set email addresses in the Accounts view."
+            "PDFs are generated on demand. Accounts without an email address are shown "
+            "but the Send button is disabled — set addresses in the Accounts view."
         )
+        email_desc.setProperty("class", "muted")
         email_desc.setWordWrap(True)
-        email_desc.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
         email_outer.addWidget(email_desc)
 
-        # Folder + group filter row
-        email_ctrl_row = QHBoxLayout()
-        email_ctrl_row.setSpacing(8)
-
-        folder_lbl2 = QLabel("PDF folder:")
-        folder_lbl2.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
-        email_ctrl_row.addWidget(folder_lbl2)
-        self.lbl_email_dir = QLabel("Use same folder as Generate section above")
-        self.lbl_email_dir.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
-        email_ctrl_row.addWidget(self.lbl_email_dir, stretch=1)
-
-        email_ctrl_row.addSpacing(16)
-        filter_lbl = QLabel("Group:")
-        filter_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size:11px;")
-        email_ctrl_row.addWidget(filter_lbl)
-        self.email_group_filter = QComboBox()
-        self.email_group_filter.setFixedWidth(200)
-        self.email_group_filter.currentIndexChanged.connect(self._load_email_table)
-        email_ctrl_row.addWidget(self.email_group_filter)
-
-        email_outer.addLayout(email_ctrl_row)
+        # PDF folder row (shared with Generate tab)
+        email_folder_row = QHBoxLayout()
+        email_folder_row.setSpacing(8)
+        folder_lbl2 = QLabel("PDF output folder:")
+        folder_lbl2.setProperty("class", "muted")
+        email_folder_row.addWidget(folder_lbl2)
+        self.lbl_email_dir = QLabel("No folder selected")
+        self.lbl_email_dir.setProperty("class", "muted")
+        email_folder_row.addWidget(self.lbl_email_dir, stretch=1)
+        btn_email_folder = QPushButton("Change…")
+        btn_email_folder.clicked.connect(self._choose_export_dir)
+        email_folder_row.addWidget(btn_email_folder)
+        email_outer.addLayout(email_folder_row)
 
         # Table: Account# | Name | Email | PDF File | Preview | Send
         self.email_table = QTableWidget(0, 6)
         self.email_table.setHorizontalHeaderLabels(
             ["Account #", "Name", "Email", "PDF File", "Preview", "Send"]
         )
-        self.email_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.email_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self.email_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.email_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.email_table.horizontalHeader().setSectionResizeMode(
-            4, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.email_table.horizontalHeader().setSectionResizeMode(
-            5, QHeaderView.ResizeMode.ResizeToContents
-        )
+        self.email_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.email_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.email_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.email_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.email_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.email_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.email_table.verticalHeader().setVisible(False)
         self.email_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.email_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.email_table.setAlternatingRowColors(True)
-        self.email_table.setMinimumHeight(200)
-        email_outer.addWidget(self.email_table)
+        email_outer.addWidget(self.email_table, stretch=1)
 
         self.email_status_lbl = QLabel("")
         self.email_status_lbl.setWordWrap(True)
         email_outer.addWidget(self.email_status_lbl)
 
-        root.addWidget(email_frame)
+        e_layout.addWidget(email_frame, stretch=1)
+        self.tabs.addTab(email_page, "Email Statements")
 
+        # ── Shared state ──────────────────────────────────────────────
         self._email_workers: list = []   # keep references to avoid GC
-
         self._export_dir: str = ""
         self._export_worker: Optional[QThread] = None
+
+        # Restore persisted export folder
+        from db.local_db import get_setting as _gs
+        _saved = _gs("last_export_dir", "")
+        if _saved:
+            self._export_dir = _saved
+            self._last_export_dir = _saved
+            self.lbl_export_dir.setText(_saved)
+            self.lbl_email_dir.setText(_saved)
+            self.btn_export.setEnabled(True)
+            self.btn_export_single.setEnabled(True)
+            self.btn_export_group.setEnabled(True)
+
         self._load_templates()
         self._load_export_combos()
 
