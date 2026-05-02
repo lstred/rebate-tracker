@@ -110,7 +110,9 @@ class TopBar(QWidget):
         saved_end = get_setting("date_range_end")
 
         default_end = date.today()
-        default_start = date(default_end.year, 1, 1)
+        # Default start: 24.5 months before today (≈ 735 days) so the window
+        # captures roughly two full rebate years for new installs.
+        default_start = default_end - timedelta(days=int(24.5 * 30.4375))
 
         start = _parse_setting_date(saved_start) or default_start
         end = _parse_setting_date(saved_end) or default_end
@@ -475,8 +477,12 @@ class MainWindow(QMainWindow):
             self.view_settings._refresh_fields()
 
         self.status_bar.showMessage(
-            "✓  Restore complete — all views reloaded with restored data.", 10000
+            "✓  Restore complete — reloading data from SQL Server…", 10000
         )
+
+        # Automatically trigger a SQL Server data refresh so sales cache is
+        # repopulated with the restored accounts without any manual action.
+        self._on_sync_requested()
 
 
 # ---------------------------------------------------------------------------

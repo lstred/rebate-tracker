@@ -220,7 +220,7 @@ class TierProgressBar(QWidget):
             painter.setBrush(QColor(C.get("accent", "#3b7dd8")))
             painter.drawRoundedRect(0, bar_y, fill_x, bar_h, 3, 3)
 
-        # Prior year reference line — gray dashed vertical marker
+        # Prior year reference — gray dashed vertical line + amber diamond marker
         if self._prior_year > 0:
             py_x = int(W * frac(self._prior_year))
             if 1 < py_x < W - 1:
@@ -231,6 +231,21 @@ class TierProgressBar(QWidget):
                     py_pen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(py_pen)
                 painter.drawLine(py_x, bar_y, py_x, bar_y + bar_h)
+
+                # Amber diamond ◆ at prior year position
+                if not self._mini:
+                    ds = 5
+                    cx = min(py_x, W - ds - 1)
+                    cy = bar_y + bar_h // 2
+                    path = QPainterPath()
+                    path.moveTo(QPointF(cx,      cy - ds))
+                    path.lineTo(QPointF(cx + ds, cy))
+                    path.lineTo(QPointF(cx,      cy + ds))
+                    path.lineTo(QPointF(cx - ds, cy))
+                    path.closeSubpath()
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(C.get("warning", "#fbbf24")))
+                    painter.drawPath(path)
 
         # Tier boundary ticks
         for th, types in self._segments:
@@ -244,21 +259,6 @@ class TierProgressBar(QWidget):
             painter.drawLine(x, bar_y, x, bar_y + bar_h)
             if not self._mini:
                 painter.drawLine(x, bar_y - 4, x, bar_y)
-
-        # Projected diamond marker
-        if self._projected > 0 and proj_x > 0:
-            ds = 3 if self._mini else 5
-            cx = min(proj_x, W - ds - 1)
-            cy = bar_y + bar_h // 2
-            path = QPainterPath()
-            path.moveTo(QPointF(cx,      cy - ds))
-            path.lineTo(QPointF(cx + ds, cy))
-            path.lineTo(QPointF(cx,      cy + ds))
-            path.lineTo(QPointF(cx - ds, cy))
-            path.closeSubpath()
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(C.get("warning", "#fbbf24")))
-            painter.drawPath(path)
 
         # Threshold labels (full mode only)
         if not self._mini and self._segments:
@@ -303,10 +303,9 @@ class TierProgressBar(QWidget):
             lay.addSpacing(gap)
 
         add("█", f"color:{C['accent']}; font-size:11px;", "Current Sales")
-        add("▒", f"color:{C['accent']}; font-size:11px;", "Projected")
+        add("▒", f"color:{C['accent']}; font-size:11px;", "Projected (Year-End)")
         if show_prior_year:
-            add("┆", f"color:{C.get('text_dim','#4a5568')}; font-size:12px;", "Prior Year")
-        add("◆", f"color:{C['warning']}; font-size:10px;", "Year-End Est.")
+            add("◆", f"color:{C['warning']}; font-size:10px;", "Prior Year")
         add("│", f"color:{C['success']}; font-size:13px; font-weight:bold;", "Tier Reached")
         add("│", f"color:{C.get('text_dim','#4a5568')}; font-size:13px;", "Tier Pending")
         lay.addStretch()
