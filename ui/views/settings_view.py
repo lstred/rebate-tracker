@@ -116,7 +116,6 @@ class SettingsView(QWidget):
 
         # ── Appearance ─────────────────────────────────────────────────
         appear_group = QGroupBox("Appearance")
-        self._admin_only_groups.append(appear_group)
         appear_layout = QVBoxLayout(appear_group)
         appear_layout.setSpacing(10)
 

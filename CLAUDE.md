@@ -156,6 +156,7 @@ rebate tracking/
   - Add/Edit/Delete prior-year overrides
 - **Gated write actions (Rebate Structures view):**
   - + New, Edit Selected, Delete Selected, Apply to Account / Program
+- **Settings view in inquiry mode:** All six QGroupBoxes (Email, SQL Server Connection, Field Name Configuration, Data Management, Backup & Restore) are disabled via `setEnabled(False)`. Within Cloud Backup, the credential fields and Save / Test Connection / Backup Now buttons are individually disabled. **Appearance (theme toggle) and Restore from Cloud remain accessible in inquiry mode.** `refresh_admin_state()` is called at build time and re-called via `Sidebar.admin_changed` signal whenever admin mode toggles.
 - **Inquiry-mode UX:** Write action methods start with `from ui.admin_state import require_admin; if not require_admin(self): return`. `require_admin()` shows a polished QMessageBox if not admin.
 - **Forgot Password flow:** In the login dialog, "Forgot Password" (styled as a link) opens a small prompt for the requester's email, then `_ForgotPasswordWorker(QThread)` sends the current password to `lukas_stred@nrfdist.com` via the configured SMTP. Success/failure shown inline. Requires SMTP to be configured in Settings → Email.
 
