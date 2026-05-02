@@ -105,6 +105,10 @@ class SettingsView(QWidget):
         scroll.setWidget(inner)
         outer.addWidget(scroll)
 
+        # Track which widget groups are gated to admin mode only
+        self._admin_only_groups: list = []    # whole QGroupBoxes to disable
+        self._admin_cloud_widgets: list = []  # individual widgets inside cloud section
+
         # Heading
         heading = QLabel("Settings")
         heading.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
@@ -112,6 +116,7 @@ class SettingsView(QWidget):
 
         # ── Appearance ─────────────────────────────────────────────────
         appear_group = QGroupBox("Appearance")
+        self._admin_only_groups.append(appear_group)
         appear_layout = QVBoxLayout(appear_group)
         appear_layout.setSpacing(10)
 
@@ -142,6 +147,7 @@ class SettingsView(QWidget):
 
         # ── Email (SMTP) ────────────────────────────────────────────────
         email_group = QGroupBox("Email — Microsoft Outlook / Office 365")
+        self._admin_only_groups.append(email_group)
         email_layout = QVBoxLayout(email_group)
         email_layout.setSpacing(10)
 
@@ -206,6 +212,7 @@ class SettingsView(QWidget):
 
         # ── SQL Server Connection ─────────────────────────────────────
         conn_group = QGroupBox("SQL Server Connection")
+        self._admin_only_groups.append(conn_group)
         conn_layout = QVBoxLayout(conn_group)
         conn_layout.setSpacing(10)
 
@@ -232,6 +239,7 @@ class SettingsView(QWidget):
 
         # ── Field name configuration ──────────────────────────────────
         field_group = QGroupBox("Field Name Configuration")
+        self._admin_only_groups.append(field_group)
         field_form = QFormLayout(field_group)
         field_form.setSpacing(10)
 
@@ -252,6 +260,7 @@ class SettingsView(QWidget):
 
         # ── Data management ───────────────────────────────────────────
         data_group = QGroupBox("Data Management")
+        self._admin_only_groups.append(data_group)
         data_layout = QVBoxLayout(data_group)
         data_layout.setSpacing(10)
 
@@ -272,6 +281,7 @@ class SettingsView(QWidget):
 
         # ── Backup & Restore ──────────────────────────────────────────
         backup_group = QGroupBox("Backup & Restore")
+        self._admin_only_groups.append(backup_group)
         backup_layout = QVBoxLayout(backup_group)
         backup_layout.setSpacing(10)
 
@@ -350,14 +360,17 @@ class SettingsView(QWidget):
         btn_save_cloud.setProperty("class", "primary")
         btn_save_cloud.clicked.connect(self._save_cloud_settings)
         cloud_btn_row.addWidget(btn_save_cloud)
+        self._admin_cloud_widgets.append(btn_save_cloud)
 
         btn_test_cloud = QPushButton("Test Connection")
         btn_test_cloud.clicked.connect(self._test_cloud_connection)
         cloud_btn_row.addWidget(btn_test_cloud)
+        self._admin_cloud_widgets.append(btn_test_cloud)
 
         btn_push_now = QPushButton("⬆  Backup Now")
         btn_push_now.clicked.connect(self._push_cloud_backup)
         cloud_btn_row.addWidget(btn_push_now)
+        self._admin_cloud_widgets.append(btn_push_now)
 
         btn_restore_cloud = QPushButton("⬇  Restore from Cloud")
         btn_restore_cloud.setProperty("class", "danger")
@@ -390,7 +403,27 @@ class SettingsView(QWidget):
         about_layout.addWidget(about_lbl)
         root.addWidget(about_group)
 
+        # MySQL credential fields are already instance attrs — add to cloud list
+        self._admin_cloud_widgets.extend([
+            self.mysql_host, self.mysql_port, self.mysql_database,
+            self.mysql_user, self.mysql_password,
+        ])
+
+        # Apply initial admin state (inquiry mode on first open)
+        self.refresh_admin_state()
+
         root.addStretch()
+
+    # ------------------------------------------------------------------
+
+    def refresh_admin_state(self) -> None:
+        """Enable or disable settings controls based on current admin mode."""
+        from ui.admin_state import is_admin
+        admin = is_admin()
+        for group in getattr(self, "_admin_only_groups", []):
+            group.setEnabled(admin)
+        for widget in getattr(self, "_admin_cloud_widgets", []):
+            widget.setEnabled(admin)
 
     # ------------------------------------------------------------------
 

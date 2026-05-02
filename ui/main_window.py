@@ -192,7 +192,8 @@ class TopBar(QWidget):
 # ---------------------------------------------------------------------------
 
 class Sidebar(QWidget):
-    nav_changed = pyqtSignal(int)  # index of selected view
+    nav_changed = pyqtSignal(int)   # index of selected view
+    admin_changed = pyqtSignal(bool)  # emitted when admin mode toggles
 
     _NAV_ITEMS = [
         ("⬛", "Dashboard"),
@@ -284,12 +285,14 @@ class Sidebar(QWidget):
             if reply == QMessageBox.StandardButton.Yes:
                 admin_state.set_admin(False)
                 self._update_admin_button_style(False)
+                self.admin_changed.emit(False)
         else:
             from ui.admin_login_dialog import AdminLoginDialog
             dlg = AdminLoginDialog(self)
             if dlg.exec():
                 admin_state.set_admin(True)
                 self._update_admin_button_style(True)
+                self.admin_changed.emit(True)
 
     def _update_admin_button_style(self, is_admin: bool) -> None:
         """Redraw the admin button to reflect the current access level."""
@@ -421,10 +424,16 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         self.sidebar.nav_changed.connect(self._on_nav_changed)
+        self.sidebar.admin_changed.connect(self._on_admin_state_changed)
         self.top_bar.date_range_changed.connect(self._on_date_range_changed)
         self.top_bar.sync_requested.connect(self._on_sync_requested)
         self.view_settings.theme_changed.connect(self._apply_theme)
         self.view_settings.restore_complete.connect(self._on_data_restored)
+
+    def _on_admin_state_changed(self, _is_admin: bool) -> None:
+        """Propagate admin state change to any view that needs to refresh its controls."""
+        if hasattr(self, "view_settings"):
+            self.view_settings.refresh_admin_state()
 
     def _on_nav_changed(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
