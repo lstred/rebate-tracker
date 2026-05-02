@@ -245,9 +245,19 @@ class Sidebar(QWidget):
         div.setFrameShape(QFrame.Shape.HLine)
         div.setProperty("class", "hline-sep")
         layout.addWidget(div)
+        layout.addSpacing(6)
+
+        # Admin mode button — shows inquiry / admin status; click to toggle
+        self._btn_admin = QPushButton()
+        self._btn_admin.setFixedHeight(38)
+        self._btn_admin.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_admin.clicked.connect(self._on_admin_clicked)
+        layout.addWidget(self._btn_admin)
+        self._update_admin_button_style(False)  # start in inquiry mode
+
         layout.addSpacing(4)
 
-        # Bottom nav buttons (Settings is index 4)
+        # Bottom nav buttons (Settings — index 5 in _nav_buttons)
         for icon, label in self._BOTTOM_ITEMS:
             btn = NavButton(icon, label)
             btn.clicked.connect(
@@ -260,6 +270,47 @@ class Sidebar(QWidget):
 
         # Select first item
         self._select(0)
+
+    def _on_admin_clicked(self) -> None:
+        from ui import admin_state
+        if admin_state.is_admin():
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                "Admin Mode Active",
+                "Deactivate admin mode and return to inquiry-only mode?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                admin_state.set_admin(False)
+                self._update_admin_button_style(False)
+        else:
+            from ui.admin_login_dialog import AdminLoginDialog
+            dlg = AdminLoginDialog(self)
+            if dlg.exec():
+                admin_state.set_admin(True)
+                self._update_admin_button_style(True)
+
+    def _update_admin_button_style(self, is_admin: bool) -> None:
+        """Redraw the admin button to reflect the current access level."""
+        if is_admin:
+            self._btn_admin.setText("\U0001f513  Admin Mode")
+            self._btn_admin.setStyleSheet(
+                f"margin: 0 10px; border-radius: 6px; font-size: 11px;"
+                f"color: {C.get('warning', '#f59e0b')};"
+                f"background: rgba(245,158,11,0.12);"
+                f"border: 1px solid rgba(245,158,11,0.35);"
+                f"text-align: left; padding-left: 10px;"
+            )
+        else:
+            self._btn_admin.setText("\U0001f512  Inquiry Mode")
+            self._btn_admin.setStyleSheet(
+                f"margin: 0 10px; border-radius: 6px; font-size: 11px;"
+                f"color: {C.get('text_muted', '#6b7a99')};"
+                f"background: transparent;"
+                f"border: 1px solid {C.get('border', '#2d3748')};"
+                f"text-align: left; padding-left: 10px;"
+            )
 
     def _select(self, index: int) -> None:
         for i, btn in enumerate(self._nav_buttons):

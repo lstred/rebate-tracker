@@ -1155,6 +1155,9 @@ class AccountDetailPanel(QWidget):
     def _edit_start_date(self):
         if not self._account:
             return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
+            return
         dlg = QDialog(self)
         dlg.setWindowTitle("Edit Start Date")
         dlg.setMinimumWidth(300)
@@ -1197,6 +1200,9 @@ class AccountDetailPanel(QWidget):
 
     def _edit_email(self):
         if not self._account:
+            return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
             return
         from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QVBoxLayout, QLabel
         import re
@@ -1271,6 +1277,9 @@ class AccountDetailPanel(QWidget):
     def _add_override(self):
         if not self._account:
             return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
+            return
         dlg = OverrideDialog(self._account.account_number, parent=self)
         if dlg.exec():
             data = dlg.get_data()
@@ -1296,6 +1305,9 @@ class AccountDetailPanel(QWidget):
             self._rebuild()
 
     def _edit_override(self, ov: dict):
+        from ui.admin_state import require_admin
+        if not require_admin(self):
+            return
         dlg = OverrideDialog(self._account.account_number, existing=ov, parent=self)
         if dlg.exec():
             data = dlg.get_data()
@@ -1324,6 +1336,9 @@ class AccountDetailPanel(QWidget):
             self._rebuild()
 
     def _delete_override(self, override_id: int):
+        from ui.admin_state import require_admin
+        if not require_admin(self):
+            return
         if (
             QMessageBox.question(self, "Delete Override", "Delete this override?")
             == QMessageBox.StandardButton.Yes
@@ -1346,6 +1361,9 @@ class AccountDetailPanel(QWidget):
 
     def _assign_structure(self):
         if not self._account:
+            return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
             return
         with get_session() as session:
             structures = session.query(RebateStructure).all()
@@ -1396,6 +1414,9 @@ class AccountDetailPanel(QWidget):
     def _customize_rebate(self):
         """Open the StructureDialog to create/edit a per-account custom rebate."""
         if not self._account:
+            return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
             return
         from ui.views.rebate_structures_view import StructureDialog
 
@@ -1490,6 +1511,9 @@ class AccountDetailPanel(QWidget):
     def _reset_custom_rebate(self):
         """Remove the per-account custom rebate and revert to the derived template."""
         if not self._account or not self._detail_data:
+            return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
             return
 
         structure = self._detail_data.get("structure")
@@ -1680,6 +1704,9 @@ class AccountsView(QWidget):
             self.detail_panel.load_account(acct, self._start, self._end)
 
     def _add_account_dialog(self):
+        from ui.admin_state import require_admin
+        if not require_admin(self):
+            return
         dlg = AddAccountDialog(self)
         if not dlg.exec():
             return
@@ -1777,6 +1804,9 @@ class AccountsView(QWidget):
     def _remove_account(self):
         item = self.account_list.currentItem()
         if not item:
+            return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
             return
         acct_no = item.data(Qt.ItemDataRole.UserRole)
         if (

@@ -47,6 +47,8 @@ rebate tracking/
 ├── ui/
 │   ├── main_window.py             # App shell: sidebar + TopBar + QStackedWidget
 │   ├── theme.py                   # Colour constants (C dict) + apply_theme() + _DARK/_LIGHT palettes
+│   ├── admin_state.py             # Session-scoped admin mode state + require_admin() helper
+│   ├── admin_login_dialog.py      # Admin login dialog + forgot-password email flow
 │   └── views/
 │       ├── dashboard_view.py      # KPI cards + bar chart (DashboardLoader QThread)
 │       ├── accounts_view.py       # Account list + detail panel + overrides
@@ -138,6 +140,24 @@ rebate tracking/
   - `dollar_one` — rate applies to ALL sales from dollar one when threshold is crossed (overrides lower tiers)
   - `forward_only` — rate applies only to incremental sales above the threshold (stacks)
 - `structure_type` field in DB is kept for backward compat but new structures are always `"tiered"` with `applies_to` per tier.
+
+---
+
+## Admin Mode
+- **Files:** `ui/admin_state.py` (state) + `ui/admin_login_dialog.py` (dialog).
+- **State:** Module-level `_admin_active: bool = False`. `is_admin()` / `set_admin(bool)` / `require_admin(parent)` are the public API.
+- **Default password:** `123nrf`. Stored in `app_settings` under key `admin_password`. `get_admin_password()` reads from DB; falls back to `"123nrf"` if not set. Password is stored as plain text (internal desktop app).
+- **Sidebar button:** Sits between the hline divider and the Settings nav button. Shows 🔒 Inquiry Mode (muted border, gray text) when not admin; 🔓 Admin Mode (amber tint, amber border) when admin. Click to log in or log out (logout requires confirmation).
+- **Session persistence:** Admin mode stays active for the lifetime of the process — `set_admin(False)` is only called on explicit logout.
+- **Gated write actions (Accounts view):**
+  - Add Account, Remove Selected
+  - Edit start date, Edit email (✉ button)
+  - Assign Structure, Customize rebate, Edit Custom Rebate, Reset to Template
+  - Add/Edit/Delete prior-year overrides
+- **Gated write actions (Rebate Structures view):**
+  - + New, Edit Selected, Delete Selected, Apply to Account / Program
+- **Inquiry-mode UX:** Write action methods start with `from ui.admin_state import require_admin; if not require_admin(self): return`. `require_admin()` shows a polished QMessageBox if not admin.
+- **Forgot Password flow:** In the login dialog, "Forgot Password" (styled as a link) opens a small prompt for the requester's email, then `_ForgotPasswordWorker(QThread)` sends the current password to `lukas_stred@nrfdist.com` via the configured SMTP. Success/failure shown inline. Requires SMTP to be configured in Settings → Email.
 
 ---
 

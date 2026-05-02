@@ -820,6 +820,9 @@ class RebateStructuresView(QWidget):
         return lbl
 
     def _new_structure(self):
+        from ui.admin_state import require_admin
+        if not require_admin(self):
+            return
         dlg = StructureDialog(parent=self)
         if dlg.exec():
             data = dlg.get_data()
@@ -839,6 +842,9 @@ class RebateStructuresView(QWidget):
     def _edit_structure(self):
         item = self.struct_list.currentItem()
         if not item:
+            return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
             return
         struct_id = item.data(Qt.ItemDataRole.UserRole)
         with get_session() as session:
@@ -886,6 +892,9 @@ class RebateStructuresView(QWidget):
         item = self.struct_list.currentItem()
         if not item:
             return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
+            return
         struct_id = item.data(Qt.ItemDataRole.UserRole)
         if (
             QMessageBox.question(
@@ -906,6 +915,9 @@ class RebateStructuresView(QWidget):
         item = self.struct_list.currentItem()
         if not item:
             QMessageBox.warning(self, "No Selection", "Select a structure first.")
+            return
+        from ui.admin_state import require_admin
+        if not require_admin(self):
             return
         struct_id = item.data(Qt.ItemDataRole.UserRole)
         with get_session() as session:
